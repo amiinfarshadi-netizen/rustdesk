@@ -2,72 +2,222 @@ name: Build BeeNet Desk Windows
 
 on:
   workflow_dispatch:
+
   push:
     branches:
-      - master
       - main
+      - master
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
-  build:
+  build-windows:
     name: Build Windows Client
     runs-on: windows-2022
+
     steps:
+      # دریافت سورس پروژه و ساب‌ماژول‌ها
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
+      # نمایش ساختار اولیه پروژه
+      - name: Inspect repository
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          Write-Host "Current directory:"
+          Get-Location
+
+          Write-Host "Repository files:"
+          Get-ChildItem -Force
+
+          if (-not (Test-Path "Error "build {
+            Write-Error "build.py was not found in the repository root."
+            exit 1
+          }
+
+      # نصب Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
+          cache: "pip"
 
-      - name: Setup Rust toolchain
+      # نصب Rust
+      - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          toolchain: stable
+          target: x86_64-pc-windows-msvc
 
+      # نصب Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
-          channel: 'stable'
+          flutter-version: "3.24.5"
+          channel: "stable"
           cache: true
 
-      - name: Install dependencies via Chocolatey
-        shell: powershell
+      # نصب ابزارهای موردنیاز ویندوز
+      - name: Install Windows build dependencies
+        shell: pwsh
         run: |
-          choco install nasm yasm ninja llvm -y
+          $ErrorActionPreference = "Stop"
 
-      - name: Inject BeeNet Configs
-        shell: powershell
+          choco install nasm yasm ninja llvm -y --no-progress
+
+          Write-Host "Checking installed tools..."
+
+          python --version
+          rustc --version
+          cargo --version
+          flutter --version
+          nasm -version
+          yasm --version
+          ninja --version
+          clang --version
+
+      # نصب وابستگی‌های Python
+      - name: Install Python dependencies
+        shell: pwsh
         run: |
-          $server = "5.202.90.37"
-          $key = "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-          [System.Environment]::SetEnvironmentVariable('RENDEZVOUS_SERVER', $server, "Process")
-          [System.Environment]::SetEnvironmentVariable('RS_PUB_KEY', $key, "Process")
-          Write-Host "Injected Server: $server"
+          $ErrorActionPreference = "Stop"
 
-      - name: Run Build Script
-        shell: powershell
+          python -m pip install --upgrade pip setuptools wheel
+
+          if (Test-Path "requirements.txt") {
+            python -m pip install -r requirements.txt
+          }
+
+          python -m pip install requests toml
+
+      # تنظیم سرور BeeNet
+      - name: Inject BeeNet configuration
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          $rendezvousServer = "5.202.90.37"
+          $rsPubKey = "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+
+          "RENDEZVOUS_SERVER=$rendezvousServer" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          "RS_PUB_KEY=$rsPubKey" |
+            Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          Write-Host "BeeNet server configuration injected successfully."
+          Write-Host "RENDEZVOUS_SERVER=$rendezvousServer"
+          Write-Host "RS_PUB_KEY has been configured."
+
+      # بررسی نهایی متغیرهای محیطی
+      - name: Verify BeeNet configuration
+        shell: pwsh
         env:
-          RENDEZVOUS_SERVER: '5.202.90.37'
-          RS_PUB_KEY: 'urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw='
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
         run: |
-          python -m pip install --upgrade pip requests toml
-          python build.py --flutter --hwcodec
+          $ErrorActionPreference = "Stop"
 
-      - name: Upload Windows Executable
+          if ([string]::IsNullOrWhiteSpace($env:RENDEZVOUS_SERVER)) {
+            Write-Error "RENDEZVOUS_SERVER is empty."
+            exit 1
+          }
+
+          if ([string]::IsNullOrWhiteSpace($env:RS_PUB_KEY)) {
+            Write-Error "RS_PUB_KEY is empty."
+            exit 1
+          }
+
+          Write-Host "RENDEZVOUS_SERVER is set."
+          Write-Host "RS_PUB_KEY is set."
+
+      # اجرای Build
+      - name: Run Build Script
+        shell: pwsh
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+          CARGO_TERM_COLOR: "always"
+          PYTHONUNBUFFERED: "1"
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          Write-Host "========================================"
+          Write-Host "Starting BeeNet Desk Windows build"
+          Write-Host "========================================"
+
+          Write-Host "Current directory:"
+          Get-Location
+
+          Write-Host "Checking build.py:"
+          Get-Item "build.py"
+
+          Write-Host "Running build.py..."
+          Write-Host "Command: python build.py --flutter --hwcodec"
+
+          python build.py --flutter --hwcodec 2>&1 |
+            Tee-Object -FilePath "build-output.log"
+
+          $buildExitCode = $LASTEXITCODE
+
+          Write-Host "========================================"
+          Write-Host "Build exit code: $buildExitCode"
+          Write-Host "========================================"
+
+          if ($buildExitCode -ne 0) {
+            Write-Host "===== BUILD FAILED ====="
+            if (Test-Path "build-output.log") {
+              Get-Content "build-output.log"
+            }
+            exit $buildExitCode
+          }
+
+          Write-Host "Build completed successfully."
+
+      # نمایش فایل‌های خروجی
+      - name: Find generated files
+        if: always()
+        shell: pwsh
+        run: |
+          Write-Host "Searching for generated EXE and ZIP files..."
+
+          $files = Get-ChildItem `
+            -Path . `
+            -Include *.exe,*.zip `
+            -File `
+            -Recurse `
+            -ErrorAction SilentlyContinue
+
+          if ($files) {
+            $files | Select-Object FullName, Length, LastWriteTime | Format-Table -AutoSize
+          }
+          else {
+            Write-Host "No EXE or ZIP files were found."
+          }
+
+      # ذخیره لاگ بیلد
+      - name: Upload build log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-build-log
+          path: build-output.log
+          if-no-files-found: warn
+
+      # ذخیره فایل‌های نهایی
+      - name: Upload BeeNet Desk Windows files
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: BeeNet-Desk-Windows
           path: |
-            target/release/*.exe
-            build/windows/runner/Release/*.exe
-            rustdesk-*.exe
-            *.exe
+            **/*.exe
+            **/*.zip
           if-no-files-found: warn
