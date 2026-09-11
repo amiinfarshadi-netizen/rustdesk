@@ -19,10 +19,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
-      - name: Install Build Tools
-        run: |
-          choco install nasm yasm llvm ninja -y
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -32,25 +34,31 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.19.6'
           channel: 'stable'
           cache: true
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.10'
-
-      - name: Install Python dependencies
+      - name: Install dependencies via Chocolatey
+        shell: powershell
         run: |
-          python -m pip install --upgrade pip
-          pip install requests toml
+          choco install nasm yasm ninja llvm -y
 
-      - name: Build BeeNet Desk (Windows)
-        shell: cmd
+      - name: Inject BeeNet Configs
+        shell: powershell
+        run: |
+          $server = "5.202.90.37"
+          $key = "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          [System.Environment]::SetEnvironmentVariable('RENDEZVOUS_SERVER', $server, "Process")
+          [System.Environment]::SetEnvironmentVariable('RS_PUB_KEY', $key, "Process")
+          Write-Host "Injected Server: $server"
+
+      - name: Run Build Script
+        shell: powershell
         env:
-          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER || '5.202.90.37' }}
-          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY || 'urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw=' }}
+          RENDEZVOUS_SERVER: '5.202.90.37'
+          RS_PUB_KEY: 'urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw='
         run: |
+          python -m pip install --upgrade pip requests toml
           python build.py --flutter --hwcodec
 
       - name: Upload Windows Executable
@@ -60,5 +68,6 @@ jobs:
           path: |
             target/release/*.exe
             build/windows/runner/Release/*.exe
+            rustdesk-*.exe
             *.exe
           if-no-files-found: warn
