@@ -1,9 +1,18 @@
 name: Build BeeNet Desk Windows
 
-on: [workflow_dispatch, push]
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
+
+permissions:
+  contents: write
 
 jobs:
   build:
+    name: Build Windows Client
     runs-on: windows-2022
     steps:
       - name: Checkout repository
@@ -11,45 +20,46 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Set up Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.22.3'
-          channel: 'stable'
+      - name: Install Build Tools (LLVM, NASM, Yasm, Ninja)
+        run: |
+          choco install nasm yasm llvm ninja -y
 
-      - name: Set up Rust
+      - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: x86_64-pc-windows-msvc
 
-      - name: Install dependencies
-        shell: bash
-        run: |
-          choco install nasm yasm llvm -y
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+          cache: true
 
-      - name: Flutter pub get
-        shell: bash
-        run: |
-          cd flutter
-          flutter pub get
-          cd ..
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.10'
 
-      - name: Set Environment Secrets
-        shell: bash
+      - name: Install Python dependencies
         run: |
-          echo "RENDEZVOUS_SERVER=${{ secrets.RENDEZVOUS_SERVER }}" >> $GITHUB_ENV
-          echo "RS_PUB_KEY=${{ secrets.RS_PUB_KEY }}" >> $GITHUB_ENV
+          python -m pip install --upgrade pip
+          pip install requests
 
-      - name: Run Build Script
+      - name: Build BeeNet Desk (Windows)
         shell: bash
+        env:
+          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER || '5.202.90.37' }}
+          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY || 'urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw=' }}
         run: |
-          python3 build.py --flutter --hwcodec
+          python build.py --flutter --hwcodec
 
-      - name: Upload Windows Output
+      - name: Upload Windows Executable
         uses: actions/upload-artifact@v4
         with:
-          name: BeeNetDesk-Windows
+          name: BeeNet-Desk-Windows
           path: |
-            flutter/build/windows/runner/Release/**
             target/release/*.exe
-            build/*.exe
+            build/windows/runner/Release/*.exe
+            rustdesk-*.exe
+            *.exe
+          if-no-files-found: warn
