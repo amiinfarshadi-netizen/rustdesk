@@ -20,7 +20,7 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Install Build Tools (LLVM, NASM, Yasm, Ninja)
+      - name: Install Build Tools
         run: |
           choco install nasm yasm llvm ninja -y
 
@@ -43,10 +43,10 @@ jobs:
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install requests
+          pip install requests toml
 
       - name: Build BeeNet Desk (Windows)
-        shell: bash
+        shell: cmd
         env:
           RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER || '5.202.90.37' }}
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY || 'urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw=' }}
@@ -60,6 +60,5 @@ jobs:
           path: |
             target/release/*.exe
             build/windows/runner/Release/*.exe
-            rustdesk-*.exe
             *.exe
           if-no-files-found: warn
