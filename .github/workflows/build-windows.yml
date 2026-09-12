@@ -1,4 +1,4 @@
-name: Build Windows Client
+name: Build BeeNet Desk Windows
 
 on:
   push:
@@ -11,8 +11,15 @@ jobs:
   build-windows:
     runs-on: windows-2022
 
+    env:
+      RENDEZVOUS_SERVER: "5.202.90.37"
+      RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+      RUST_BACKTRACE: "full"
+      CLANG_X64_PATH: "C:\\Program Files\\LLVM\\bin"
+      LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+
     steps:
-      - name: Checkout BeeNet Desk Repository
+      - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
@@ -34,7 +41,7 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Patch Configuration and Build Script
+      - name: Patch Configuration
         shell: pwsh
         run: |
           # 1. Patch Cargo.toml
@@ -43,7 +50,7 @@ jobs:
             Write-Host "Patched Cargo.toml successfully."
           }
 
-          # 2. Remove --locked from build.py to allow lockfile updates
+          # 2. Remove --locked from build.py
           if (Test-Path build.py) {
             (Get-Content build.py) -replace '--locked', '' | Set-Content build.py
             Write-Host "Removed --locked flag from build.py successfully."
@@ -55,13 +62,14 @@ jobs:
           python build.py --flutter --hwcodec 2>&1 | Tee-Object -FilePath "build-full.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Upload Build Artifacts
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: build-logs-and-binaries
+          name: beenet-windows-binaries
           path: |
             build-full.log
             build/windows/runner/Release/
             target/release/*.exe
+            target/release/*.dll
           if-no-files-found: ignore
