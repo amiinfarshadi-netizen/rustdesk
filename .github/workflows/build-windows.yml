@@ -1,36 +1,27 @@
-      - name: Run Build Script
+name: BeeNet Windows Build
+
+on:
+  workflow_dispatch:
+  push:
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+      - name: Run build.py
         shell: pwsh
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
           RUST_BACKTRACE: "full"
-          CARGO_TERM_COLOR: "always"
         run: |
-          $ErrorActionPreference = "Continue"
-
-          Write-Host "=== Starting build.py ==="
-
-          & python -u ".\build.py" --flutter --hwcodec 2>&1 |
-            Tee-Object -FilePath ".\build-full.log"
-
-          $exitCode = $LASTEXITCODE
-
-          Write-Host ""
-          Write-Host "=== Python exit code: $exitCode ==="
-          Write-Host "=== Last 200 log lines ==="
-
-          if (Test-Path ".\build-full.log") {
-            Get-Content ".\build-full.log" -Tail 200
-          }
-
-          if ($exitCode -ne 0) {
-            Write-Error "build.py failed with exit code $exitCode"
-            exit $      - name: }
-
-      - name: Upload build logs
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenet-build-logs
-          path: build-full.log
-          if-no-files-found: warn
+          python -u .\build.py --flutter --hwcodec 2>&1 | Tee-Object build
