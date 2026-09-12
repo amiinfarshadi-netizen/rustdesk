@@ -3,50 +3,53 @@ name: BeeNet Windows Build
 on:
   workflow_dispatch:
   push:
+    branches: [ "master", "main" ]
 
 jobs:
   build:
     runs-on: windows-2022
-    steps:
-      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - uses: dtolnay/rust-toolchain@stable
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
 
-      - uses: subosito/flutter-action@v2
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
-          channel: stable
+          channel: "stable"
 
-      - name: Show files
+      - name: Run Build Script
         shell: pwsh
-        run: |
-          Write-Host "=== Files in repo root ==="
-          Get-ChildItem -Force | Select-Object Name
-          Write-Host "=== build.py first 60 lines ==="
-          Get-Content .\build.py -TotalCount 60
-
-      - name: Run build.py directly
-        shell: cmd
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
           RUST_BACKTRACE: "full"
+          PYTHONUNBUFFERED: "1"
         run: |
-          python -u build.py --flutter --hwcodec
-          echo EXITCODE=%ERRORLEVEL%
-          exit %ERRORLEVEL%
+          cmd /c "python build.py --flutter --hwcodec 2>&1" | Tee-Object -FilePath "build-full.log"
+          $buildExit = $LASTEXITCODE
+          Write-Host "Build finished with exit code: $buildExit"
+          if ($buildExit -ne 0) {
+              exit $buildExit
+          }
 
-      - name: Upload everything on failure
+      - name: Upload Build Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: beenet-build-logs
+          name: build-logs-and-binaries
           path: |
             build-full.log
-            build-stdout.log
-            build-stderr.log
-          if-no-files-found: ignore
+            target/release/*.dll
+            target/release/*.exe
+            flutter/build/windows/x64/runner/Release/*
+          if-no-files-found: warn
