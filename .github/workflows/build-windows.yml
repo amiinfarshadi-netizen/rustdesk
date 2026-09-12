@@ -9,19 +9,44 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
+
       - uses: dtolnay/rust-toolchain@stable
+
       - uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
           channel: stable
-      - name: Run build.py
+
+      - name: Show files
         shell: pwsh
+        run: |
+          Write-Host "=== Files in repo root ==="
+          Get-ChildItem -Force | Select-Object Name
+          Write-Host "=== build.py first 60 lines ==="
+          Get-Content .\build.py -TotalCount 60
+
+      - name: Run build.py directly
+        shell: cmd
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
           RUST_BACKTRACE: "full"
         run: |
-          python -u .\build.py --flutter --hwcodec 2>&1 | Tee-Object build
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
+
+      - name: Upload everything on failure
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-build-logs
+          path: |
+            build-full.log
+            build-stdout.log
+            build-stderr.log
+          if-no-files-found: ignore
