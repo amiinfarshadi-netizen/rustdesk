@@ -34,18 +34,25 @@ jobs:
           flutter-version: '3.19.6'
           channel: 'stable'
 
-      - name: Patch Cargo.toml
+      - name: Patch Configuration and Build Script
         shell: pwsh
         run: |
+          # 1. Patch Cargo.toml
           if (Test-Path Cargo.toml) {
             (Get-Content Cargo.toml) -replace 'default-run\s*=', '# default-run =' | Set-Content Cargo.toml
             Write-Host "Patched Cargo.toml successfully."
           }
 
+          # 2. Remove --locked from build.py to allow lockfile updates
+          if (Test-Path build.py) {
+            (Get-Content build.py) -replace '--locked', '' | Set-Content build.py
+            Write-Host "Removed --locked flag from build.py successfully."
+          }
+
       - name: Run Build Script
         shell: pwsh
         run: |
-          python build.py --flutter 2>&1 | Tee-Object -FilePath "build-full.log"
+          python build.py --flutter --hwcodec 2>&1 | Tee-Object -FilePath "build-full.log"
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Upload Build Artifacts
