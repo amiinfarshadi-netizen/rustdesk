@@ -6,65 +6,96 @@ on:
 
 jobs:
   build-windows:
-runs-on: windows-2022
+    runs-on: windows-2022
 
-steps:
-- name: Checkout repository
-uses: actions/checkout@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
-- name: Setup Python
-uses: actions/setup-python@v5
-with:
-python-version: "3.11"
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-- name: Setup Rust
-uses: dtolnay/rust-toolchain@stable
-with:
-targets: x86_64-pc-windows-msvc
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
-- name: Setup Flutter
-uses: subosito/flutter-action@v2
-with:
-flutter-version: "3.24.5"
-channel: stable
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
 
-- name: Diagnostic checks
-shell: pwsh
-run: |
-$ErrorActionPreference = "Continue"
+      - name: Diagnostic checks
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Continue"
 
-Write-Host "=== Current directory ==="
-Get-Location
+          Write-Host "=== Current directory ==="
+          Get-Location
 
-Write-Host "=== Repository files ==="
-Get-ChildItem -Force
+          Write-Host "=== Repository files ==="
+          Get-ChildItem -Force
 
-Write-Host "=== Tool versions ==="
-python --version
-rustc --version
-cargo --version
-"
-python --version
-rustc --version
-cargo --version
--Path ".\build.py") {
-Write-Host "FOUND: build.py"
-} else {
-Write-Error "MISSING: build.py"
-exit 1
-}
+          Write-Host "=== Tool versions ==="
+          python --version
+          rustc --version
+          cargo --version
+          flutter --version
 
-if (Test-Path ".\pubspec.yaml") {
-Write-Host "FOUND: pubspec.yaml"
-} else {
-Write-Host "WARNING: pubspec.yaml not found"
-}
+          Write-Host "=== Checking build.py ==="
+          if (Test-Path ".\build.py") {
+            Write-Host "FOUND: build.py"
+          } else {
+            Write-Error "MISSING: build.py"
+            exit 1
+          }
 
-Write-Host "=== build.py help ==="
-python -u ".\build.py" --help
+          Write-Host "=== build.py help ==="
+          python -u ".\build.py" --help
 
-- name: Run Build Script
-shell: pwsh
-env:
-RENDEZVOUS_SERVER: "5.202.90.37"
-RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+      - name: Run Build Script
+        shell: pwsh
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+          CARGO_TERM_COLOR: "always"
+        run: |
+          $ErrorActionPreference = "Continue"
+
+          New-Item -ItemType File -Path ".\build-stdout.log" -Force | Out-Null
+          New-Item -ItemType File -Path ".\build-stderr.log" -Force | Out-Null
+
+          $process = Start-Process `
+            -FilePath "python" `
+            -ArgumentList @("-u", ".\build.py", "--flutter", "--hwcodec") `
+            -NoNewWindow `
+            -Wait `
+            -PassThru `
+            -RedirectStandardOutput ".\build-stdout.log" `
+            -RedirectStandardError ".\build-stderr.log"
+
+          Write-Host "Build exit code: $($process.ExitCode)"
+
+          Write-Host "===== STDERR ====="
+          Get-Content ".\build-stderr.log" -Tail 200
+
+          Write-Host "===== STDOUT ====="
+          Get-Content ".\build-stdout.log" -Tail 200
+
+          if ($process.ExitCode -ne 0) {
+            exit $process.ExitCode
+          }
+
+      - name: Upload build logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-build-logs
+          path: |
+            build-stdout.log
+            build-stderr.log
+          if-no-files-found: warn
