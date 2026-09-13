@@ -42,19 +42,17 @@ jobs:
       - name: Install vcpkg dependencies
         shell: pwsh
         run: |
-          cd C:\vcpkg
-          .\vcpkg.exe install opus:x64-windows-static libvpx:x64-windows-static
+          # استفاده از فایل vcpkg.json موجود در ریشه پروژه برای نصب کامل وابستگی‌ها
+          & "C:\vcpkg\vcpkg.exe" install --triplet x64-windows-static --x-install-root="C:\vcpkg\installed"
 
       - name: Patch Configuration
         shell: pwsh
         run: |
           if (Test-Path Cargo.toml) {
             (Get-Content Cargo.toml) -replace 'default-run\s*=', '# default-run =' | Set-Content Cargo.toml
-            Write-Host "Patched Cargo.toml"
           }
           if (Test-Path build.py) {
             (Get-Content build.py) -replace '--locked', '' | Set-Content build.py
-            Write-Host "Patched build.py"
           }
 
       - name: Run Build Script
@@ -71,7 +69,6 @@ jobs:
           path: |
             build-full.log
             flutter/build/windows/x64/runner/Release/**
-            build/windows/runner/Release/**
             target/release/*.exe
             target/release/*.dll
           if-no-files-found: ignore
