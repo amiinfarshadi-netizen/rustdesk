@@ -34,7 +34,6 @@ jobs:
       - name: Setup and Install vcpkg Dependencies
         shell: bash
         run: |
-          # استفاده از ریشه پیش‌فرض vcpkg موجود در رانر گیت‌هاب
           VCPKG_DIR="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
           echo "VCPKG_ROOT=$VCPKG_DIR" >> $GITHUB_ENV
           echo "$VCPKG_DIR" >> $GITHUB_PATH
@@ -49,33 +48,26 @@ jobs:
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked || cargo install flutter_rust_bridge_codegen --locked
           flutter_rust_bridge_codegen --rust-input ./libs/bridge/src/api.rs --dart-output ./lib/bridge_generated.dart || true
 
-      - name: Patch Configuration
-        shell: bash
-        run: |
-          if [ -f "build.py" ]; then
-            python -c "
-          with open('build.py', 'r', encoding='utf-8') as f:
-              content = f.read()
-          content = content.replace('check_status(False)', '# check_status(False)')
-          with open('build.py', 'w', encoding='utf-8') as f:
-              f.write(content)
-          "
-          fi
-
-      - name: Run Build Script
+      - name: Direct Build Execution
         shell: bash
         env:
           VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
           RUST_BACKTRACE: 1
         run: |
-          python build.py --release
+          echo "=== 1. Building Core Rust Binary ==="
+          cargo build --release
+
+          echo "=== 2. Building Flutter Desktop App ==="
+          flutter pub get
+          flutter build windows --release
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         if: always()
         with:
           name: beenet-windows-binaries
+          if-no-files-found: warn
           path: |
+            build/windows/x64/runner/Release/**
             target/release/*.exe
             target/release/*.dll
-            build-full.log
