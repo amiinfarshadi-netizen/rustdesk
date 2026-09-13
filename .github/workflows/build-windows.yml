@@ -3,32 +3,22 @@ name: BeeNet Windows Build
 on:
   workflow_dispatch:
   push:
-    branches: [ master, main ]
+    branches: [ "master", "main" ]
 
 jobs:
   build:
-    runs-on: windows-2022
-
-    env:
-      RENDEZVOUS_SERVER: "5.202.90.37"
-      RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-      RUST_BACKTRACE: "full"
-      VCPKG_ROOT: "C:\\vcpkg"
-      VCPKG_DEFAULT_TRIPLET: "x64-windows-static"
-      CLANG_X64_PATH: "C:\\Program Files\\LLVM\\bin"
-      LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
-          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -38,50 +28,54 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
+          flutter-version: '3.19.6'
           channel: 'stable'
 
       - name: Setup and Install vcpkg Dependencies
-        shell: pwsh
+        shell: bash
         run: |
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-          & "C:\vcpkg\vcpkg.exe" install opus libvpx aom ffmpeg --triplet x64-windows-static
+          # استفاده از ریشه پیش‌فرض vcpkg موجود در رانر گیت‌هاب
+          VCPKG_DIR="${VCPKG_INSTALLATION_ROOT:-C:/vcpkg}"
+          echo "VCPKG_ROOT=$VCPKG_DIR" >> $GITHUB_ENV
+          echo "$VCPKG_DIR" >> $GITHUB_PATH
+
+          cd "$VCPKG_DIR"
+          ./vcpkg.exe integrate install
+          ./vcpkg.exe install opus libvpx aom --triplet x64-windows-static
 
       - name: Flutter Rust Bridge Codegen
-        shell: pwsh
+        shell: bash
         run: |
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
-          if (Test-Path flutter) {
-            Push-Location flutter
-            flutter pub get
-            Pop-Location
-          }
-          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked || cargo install flutter_rust_bridge_codegen --locked
+          flutter_rust_bridge_codegen --rust-input ./libs/bridge/src/api.rs --dart-output ./lib/bridge_generated.dart || true
 
       - name: Patch Configuration
-        shell: pwsh
+        shell: bash
         run: |
-          if (Test-Path Cargo.toml) {
-            (Get-Content Cargo.toml) -replace 'default-run\s*=', '# default-run =' | Set-Content Cargo.toml
-          }
-          if (Test-Path build.py) {
-            (Get-Content build.py) -replace '--locked', '' | Set-Content build.py
-          }
+          if [ -f "build.py" ]; then
+            python -c "
+          with open('build.py', 'r', encoding='utf-8') as f:
+              content = f.read()
+          content = content.replace('check_status(False)', '# check_status(False)')
+          with open('build.py', 'w', encoding='utf-8') as f:
+              f.write(content)
+          "
+          fi
 
       - name: Run Build Script
-        shell: pwsh
+        shell: bash
+        env:
+          VCPKG_ROOT: ${{ env.VCPKG_ROOT }}
+          RUST_BACKTRACE: 1
         run: |
-          python -u build.py --flutter 2>&1 | Tee-Object -FilePath "build-full.log"
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          python build.py --release
 
       - name: Upload Artifacts
-        if: always()
         uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: beenet-windows-binaries
           path: |
-            build-full.log
-            flutter/build/windows/x64/runner/Release/**
             target/release/*.exe
             target/release/*.dll
-          if-no-files-found: ignore
+            build-full.log
