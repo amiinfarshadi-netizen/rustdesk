@@ -13,6 +13,8 @@ jobs:
       RENDEZVOUS_SERVER: "5.202.90.37"
       RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
       RUST_BACKTRACE: "full"
+      VCPKG_ROOT: "C:\\vcpkg"
+      VCPKG_DEFAULT_TRIPLET: "x64-windows-static-md"
 
     steps:
       - name: Checkout Repository
