@@ -35,7 +35,8 @@ jobs:
             $vcpkgDir = "C:\vcpkg"
           }
           Write-Host "Using VCPKG at: $vcpkgDir"
-          & "$vcpkgDir\vcpkg.exe" install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+          # استفاده از سوییچ --classic برای دور زدن محدودیت Manifest Mode
+          & "$vcpkgDir\vcpkg.exe" install --classic libvpx libyuv opus aom --triplet x64-windows-static
 
       - name: Flutter Rust Bridge Codegen
         shell: pwsh
