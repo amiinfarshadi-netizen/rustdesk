@@ -47,10 +47,16 @@ jobs:
           echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
           & "C:\vcpkg\vcpkg.exe" install opus libvpx aom ffmpeg --triplet x64-windows-static
 
-      - name: Install flutter_rust_bridge_codegen
+      - name: Flutter Rust Bridge Codegen
         shell: pwsh
         run: |
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
+          if (Test-Path flutter) {
+            Push-Location flutter
+            flutter pub get
+            Pop-Location
+          }
+          flutter_rust_bridge_codegen --rust-input ./src/flutter_ffi.rs --dart-output ./flutter/lib/generated_bridge.dart
 
       - name: Patch Configuration
         shell: pwsh
