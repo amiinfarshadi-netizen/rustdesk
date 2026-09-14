@@ -13,6 +13,9 @@ jobs:
 
     env:
       CARGO_TERM_COLOR: always
+      VCPKG_ROOT: C:\vcpkg
+      VCPKGRS_DYNAMIC: "0"
+      VCPKG_DEFAULT_TRIPLET: x64-windows-static
 
     steps:
       - name: Checkout Repository
@@ -88,27 +91,29 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # 1. حل وابستگی پکیج‌های فلاتر و ایجاد package_config.json
           Push-Location flutter
           flutter pub get
           Pop-Location
 
-          # همچنین در ریشه پروژه اگر فایلی وابسته است
           if (Test-Path "pubspec.yaml") {
             flutter pub get
           }
 
-          # 2. فعال‌سازی ابزارها
           dart pub global activate ffigen 5.0.1
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
 
-          # 3. اجرای نهایی کدجن
           flutter_rust_bridge_codegen `
             --rust-input src/flutter_ffi.rs `
             --dart-output flutter/lib/generated_bridge.dart
 
       - name: Run Build Script
         shell: powershell
+        env:
+          VCPKG_ROOT: C:\vcpkg
+          VCPKGRS_DYNAMIC: "0"
+          LIBCLANG_PATH: "C:\\Program Files\\LLVM\\bin"
+          INCLUDE: "C:\\vcpkg\\installed\\x64-windows-static\\include;${{ env.INCLUDE }}"
+          LIB: "C:\\vcpkg\\installed\\x64-windows-static\\lib;${{ env.LIB }}"
         run: |
           $ErrorActionPreference = "Stop"
           python -u build.py --flutter --skip-portable-pack 2>&1 | Tee-Object -FilePath build-full.log
@@ -134,3 +139,4 @@ jobs:
             flutter/build/windows/x64/runner/Release/**
             target/release/librustdesk.dll
             target/release/dylib_virtual_display.dll
+            target/release/*.exe
