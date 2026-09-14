@@ -21,6 +21,11 @@ jobs:
         with:
           submodules: recursive
 
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
@@ -40,7 +45,6 @@ jobs:
       - name: Setup vcpkg and Dependencies
         shell: powershell
         run: |
-          # اطمینان از نصب پکیج‌ها با تریپلت صحیح
           & "C:\vcpkg\vcpkg.exe" install --classic libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
 
       - name: Install LLVM
@@ -61,9 +65,6 @@ jobs:
       - name: Run Build Script
         shell: powershell
         run: |
-          # اجرای بیلد با تزریق مستقیم متغیرها برای اطمینان از شناسایی هدرها
-          $env:INCLUDE = "C:\vcpkg\installed\x64-windows-static\include;" + $env:INCLUDE
-          $env:LIB = "C:\vcpkg\installed\x64-windows-static\lib;" + $env:LIB
           python build.py --flutter --skip-portable-pack
 
       - name: Upload Binaries
