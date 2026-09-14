@@ -6,69 +6,34 @@ on:
 
 jobs:
   build:
-    runs-on: windows-2022
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.24.5'
-          channel: 'stable'
-
-      - name: Setup and Install vcpkg Dependencies
-        shell: pwsh
-        run: |
-          $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT"
-          if (-not (Test-Path "$vcpkgDir\vcpkg.exe")) {
-            $vcpkgDir = "C:\vcpkg"
-          }
-          Write-Host "Using VCPKG at: $vcpkgDir"
-          & "$vcpkgDir\vcpkg.exe" install --classic libvpx libyuv opus aom --triplet x64-windows-static
-
-      - name: Prepare Flutter and Codegen Bridge
+    runs-on: windows-20 and Codegen
         shell: pwsh
         run: |
           cd flutter
           flutter pub get
           cd ..
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
-          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart --rust-output src/bridge_generated.rs || true
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features "cli" --locked
+          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
 
-      - name: Direct Build Execution
+      - name: Run build.py with Skip Portable Pack
+        shell: cmd
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-          RUST_BACKTRACE: "full"
-          VCPKG_ROOT: "C:/vcpkg"
+          VCPKG_ROOT: "C:\\vcpkg"
           VCPKG_DEFAULT_TRIPLET: "x64-windows-static"
           BINDGEN_EXTRA_CLANG_ARGS: "-IC:/vcpkg/installed/x64-windows-static/include"
-        shell: pwsh
+          RUST_BACKTRACE: "full"
         run: |
-          # استفاده از skip-portable-pack جهت بیلد مستقیم و بدون ریسک خطای پکیجر
-          python -u build.py --flutter --skip-portable-pack
+          python -u build.py --flutter --hwcodec --skip-portable-pack
 
-      - name: Upload Artifacts
+      - name: Upload Complete Binaries
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: beenet-windows-binaries
+          name: beenetdesk-windows-release
           path: |
-            target/release/*.exe
-            target/release/*.dll
             flutter/build/windows/x64/runner/Release/*
-            flutter/build/windows/runner/Release/*
-            build/windows/x64/runner/Release/*
-            build-full.log
-          if-no-files-found: ignore
+            target/release/*.dll
+            build-*.log
+          if-no-files-found: warn
