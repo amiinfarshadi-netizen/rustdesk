@@ -10,6 +10,10 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+
+    env:
+      CARGO_TERM_COLOR: always
+
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
@@ -30,32 +34,55 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           flutter-version: '3.24.5'
-          channel: 'stable'
+          channel: stable
 
       - name: Setup and Install vcpkg Dependencies
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT"
-          if (-not (Test-Path "$vcpkgDir\vcpkg.exe")) {
+          if (-not $vcpkgDir -or -not (Test-Path "$vcpkgDir\vcpkg.exe")) {
             $vcpkgDir = "C:\vcpkg"
           }
+
+          if (-not (Test-Path "$vcpkgDir\vcpkg.exe")) {
+            throw "vcpkg.exe not found at $vcpkgDir"
+          }
+
           Write-Host "Using VCPKG at: $vcpkgDir"
-          
-          # نصب وابستگی‌های استاتیک در حالت Classic برای دور زدن Manifest Mode
-          & "$vcpkgDir\vcpkg.exe" install --classic libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
-          
-          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
+
+          & "$vcpkgDir\vcpkg.exe" install --classic `
+            libvpx:x64-windows-static `
+            libyuv:x64-windows-static `
+            opus:x64-windows-static `
+            aom:x64-windows-static
+
+          if ($LASTEXITCODE -ne 0) {
+            throw "vcpkg install failed with exit code $LASTEXITCODE"
+          }
+
+          "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "VCPKGRS_DYNAMIC=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
       - name: Flutter Rust Bridge Codegen
         shell: powershell
         run: |
+          $ErrorActionPreference = "Stop"
+
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
-          flutter_rust_bridge_codegen --rust-input libs/hbb_common/src/lib.rs --dart-output flutter/lib/generated_bridge.dart
+          flutter_rust_bridge_codegen `
+            --rust-input src/flutter_ffi.rs `
+            --dart-output flutter/lib/generated_bridge.dart
 
       - name: Run Build Script
         shell: powershell
         run: |
-          python -u build.py --flutter --skip-portable-pack
+          $ErrorActionPreference = "Stop"
+          python -u build.py --flutter --skip-portable-pack 2>&1 | Tee-Object -FilePath build-full.log
+          if ($LASTEXITCODE -ne 0) {
+            throw "build.py failed with exit code $LASTEXITCODE"
+          }
 
       - name: Upload Logs
         if: always()
@@ -64,7 +91,7 @@ jobs:
           name: build-logs
           path: |
             build-full.log
-            *.log
+            **/*.log
 
       - name: Upload Binaries
         if: always()
