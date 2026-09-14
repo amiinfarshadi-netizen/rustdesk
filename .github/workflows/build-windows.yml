@@ -65,12 +65,38 @@ jobs:
           "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
           "VCPKGRS_DYNAMIC=0" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
 
+      - name: Install LLVM (Clang) for ffigen
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          choco install llvm -y --no-progress
+
+          $llvmBin = "C:\Program Files\LLVM\bin"
+          if (-not (Test-Path $llvmBin)) {
+            throw "LLVM bin path not found: $llvmBin"
+          }
+
+          # Add to PATH for subsequent steps
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+          # Let ffigen find libclang.dll
+          "LIBCLANG_PATH=$llvmBin" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+
+          # Quick sanity check
+          clang --version
+          if ($LASTEXITCODE -ne 0) { throw "clang not available after install" }
+
       - name: Flutter Rust Bridge Codegen
         shell: powershell
         run: |
           $ErrorActionPreference = "Stop"
 
+          # Make sure ffigen exists (the exact version expected)
+          dart pub global activate ffigen 5.0.1
+
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
+
           flutter_rust_bridge_codegen `
             --rust-input src/flutter_ffi.rs `
             --dart-output flutter/lib/generated_bridge.dart
