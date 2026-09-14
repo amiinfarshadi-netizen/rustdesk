@@ -47,7 +47,7 @@ jobs:
           BINDGEN_EXTRA_CLANG_ARGS: "-IC:/vcpkg/installed/x64-windows-static/include"
           RUST_BACKTRACE: "full"
         run: |
-          python -u build.py --flutter --hwcodec --skip-portable-pack
+          python -u build.py --flutter --skip-portable-pack
 
       - name: Upload Artifacts
         if: always()
