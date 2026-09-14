@@ -31,7 +31,7 @@ jobs:
           cd flutter
           flutter pub get
           cd ..
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features "cli" --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1
           flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
 
       - name: Run Direct Build Execution
