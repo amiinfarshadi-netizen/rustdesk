@@ -6,7 +6,26 @@ on:
 
 jobs:
   build:
-    runs-on: windows-20 and Codegen
+    runs-on: windows-2022
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+
+      - name: Flutter Rust Bridge Codegen
         shell: pwsh
         run: |
           cd flutter
@@ -15,7 +34,7 @@ jobs:
           cargo install flutter_rust_bridge_codegen --version 1.80.1 --features "cli" --locked
           flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
 
-      - name: Run build.py with Skip Portable Pack
+      - name: Run Direct Build Execution
         shell: cmd
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
@@ -27,13 +46,13 @@ jobs:
         run: |
           python -u build.py --flutter --hwcodec --skip-portable-pack
 
-      - name: Upload Complete Binaries
+      - name: Upload Artifacts
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: beenetdesk-windows-release
+          name: beenetdesk-windows-binaries
           path: |
             flutter/build/windows/x64/runner/Release/*
             target/release/*.dll
-            build-*.log
+            build-full.log
           if-no-files-found: warn
