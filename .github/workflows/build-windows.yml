@@ -40,7 +40,8 @@ jobs:
         run: |
           cd C:\vcpkg
           .\vcpkg.exe integrate install
-          .\vcpkg.exe install opus libvpx aom --triplet x64-windows
+          # اضافه شدن ffmpeg برای رفع خطای کامپایل hwcodec
+          .\vcpkg.exe install opus libvpx aom ffmpeg --triplet x64-windows
 
       - name: Install LLVM
         shell: pwsh
