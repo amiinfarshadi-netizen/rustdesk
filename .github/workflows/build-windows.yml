@@ -5,54 +5,7 @@ on:
   push:
     branches:
       - master
-      - main
-
-jobs:
-  build-windows:
-    runs-on: windows-2022
-    timeout-minutes: 120
-
-    env:
-      VCPKG_ROOT: C:\vcpkg
-      VCPKG_INSTALLATION_ROOT: C:\vcpkg
-      RUST_BACKTRACE: 1
-
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup MSVC Developer Environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: stable
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          channel: stable
-
-      - name: Setup vcpkg and Dependencies
-        shell: powershell
-        run: |
-          if (!(Test-Path "C:\vcpkg")) {
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          }
-
-          & "C:\vcpkg\bootstrap-vcpkg.bat"
-
-          & "C:\vcpkg\vcpkg.exe" install --classic `
-            libvpx:x64-windows-static `
-            libyuv:x64-windows-static `
+      libyuv:x64-windows-static `
             opus:x64-windows-static `
             aom:x64-windows-static
 
@@ -69,12 +22,15 @@ jobs:
       - name: Install Flutter Rust Bridge Codegen
         shell: powershell
         run: |
-          dart pub global activate flutter_rust_bridge_codegen
+          cargo install flutter_rust_bridge_codegen --version 1.80.1
 
       - name: Flutter Rust Bridge Codegen
         shell: powershell
         run: |
-          flutter_rust_bridge_codegen generate
+          cd flutter
+          flutter pub get
+          cd ..
+          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
 
       - name: Run Build Script
         shell: powershell
