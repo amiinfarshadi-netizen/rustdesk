@@ -8,14 +8,14 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-      # ۱. دریافت کامل ریپوزیتوری و تمام ساب‌ماژول‌ها
+      # ۱. دریافت کامل ریپوزیتوری به همراه تمام ساب‌ماژول‌ها
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ۲. تنظیم محیط خط فرمان MSVC
+      # ۲. تنظیم محیط کامپایلر MSVC x64
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -27,35 +27,35 @@ jobs:
         with:
           python-version: "3.11"
 
-      # ۴. تنظیم Rust
+      # ۴. تنظیم ابزار Rust
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # ۵. تنظیم Flutter
+      # ۵. تنظیم فریم‌ورک Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
           channel: stable
 
-      # ۶. نصب وابستگی‌های FFmpeg از طریق vcpkg و تنظیم متغیرهای محیطی INCLUDE و LIB
+      # ۶. نصب پکیج‌های vcpkg در حالت Classic برای دور زدن Manifest Mode و تنظیم متغیرهای محیطی
       - name: Setup vcpkg and FFmpeg Dependencies
         shell: pwsh
         run: |
+          Remove-Item env:VCPKG_ROOT -ErrorAction SilentlyContinue
+
           $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT"
           if (-not (Test-Path $vcpkgDir)) {
               $vcpkgDir = "C:\vcpkg"
           }
           Write-Host "Using vcpkg from: $vcpkgDir"
           
-          # نصب بسته‌های مورد نیاز FFmpeg و وابستگی‌ها برای کامپایل استاتیک
           & "$vcpkgDir\vcpkg.exe" integrate install
-          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --recurse
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
 
           $vcpkgInclude = "$vcpkgDir\installed\x64-windows-static\include"
           $vcpkgLib = "$vcpkgDir\installed\x64-windows-static\lib"
 
-          # تزریق مسیرها به متغیرهای سیستمی جهت شناسایی مستقیم توسط cl.exe و link.exe
           Write-Host "Adding to INCLUDE: $vcpkgInclude"
           Write-Host "Adding to LIB: $vcpkgLib"
           
@@ -64,24 +64,24 @@ jobs:
           echo "LIB=$vcpkgLib;$env:LIB" >> $env:GITHUB_ENV
           echo "FFMPEG_DIR=$vcpkgDir\installed\x64-windows-static" >> $env:GITHUB_ENV
 
-      # ۷. دریافت کرت‌های وابسته Cargo
+      # ۷. دریافت کرت‌های وابستگی پروژه
       - name: Fetch Cargo Dependencies
         shell: pwsh
         run: |
           cargo fetch
 
-      # ۸. اعمال پچ‌های سازگاری hwcodec (شیم FF_PROFILE و اصلاح فیلد key_frame)
+      # ۸. اعمال پچ‌های سازگاری hwcodec (اصلاح key_frame و تزریق شیم‌های FF_PROFILE)
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
           $checkouts = "$env:USERPROFILE\.cargo\git\checkouts"
           if (-not (Test-Path $checkouts)) {
-              Write-Host "!! Cargo checkouts directory not found: $checkouts"
+              Write-Host "Cargo checkouts directory not found: $checkouts"
               exit 1
           }
 
-          # ۱. پچ فیلد key_frame در فایل ffmpeg_ram_decode.cpp
+          # پچ فیلد key_frame
           $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
           foreach ($f in $ramFiles) {
               Write-Host "Patching key_frame in: $($f.FullName)"
@@ -91,7 +91,7 @@ jobs:
               Write-Host "-> Successfully patched key_frame"
           }
 
-          # ۲. تزریق شیم ثوابت FF_PROFILE در util.cpp
+          # تزریق شیم ثوابت FF_PROFILE
           $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
           foreach ($f in $utilFiles) {
               Write-Host "Patching FF_PROFILE in: $($f.FullName)"
@@ -114,7 +114,7 @@ jobs:
               }
           }
 
-      # ۹. اجرای اسکریپت اصلی بیلد
+      # ۹. اجرای مستقیم اسکریپت بیلد پروژه
       - name: Run build.py directly
         shell: cmd
         env:
@@ -126,7 +126,7 @@ jobs:
           echo EXITCODE=%ERRORLEVEL%
           exit %ERRORLEVEL%
 
-      # ۱۰. ذخیره و آپلود باینری‌های نهایی تولید شده
+      # ۱۰. آپلود خروجی‌ها و فایل‌های اجرایی در صورت موفقیت
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -138,7 +138,7 @@ jobs:
             build/windows/runner/Release/*
           if-no-files-found: ignore
 
-      # ۱۱. ذخیره لاگ‌ها در صورت بروز هرگونه خطای احتمالی
+      # ۱۱. ذخیره لاگ‌های کامل در صورت بروز هرگونه خطای احتمالی
       - name: Upload Logs on Failure
         if: always()
         uses: actions/upload-artifact@v4
