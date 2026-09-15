@@ -1,20 +1,20 @@
 name: Build Windows Client
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
-
-env:
-  VCPKG_ROOT: C:\vcpkg
-  VCPKG_INSTALLATION_ROOT: C:\vcpkg
-  RUST_BACKTRACE: 1
+  push:
+    branches:
+      - main
+      - master
+  pull_request:
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2022
+
+    env:
+      VCPKG_ROOT: C:\vcpkg
+      RUST_BACKTRACE: 1
 
     steps:
       - name: Checkout Repository
@@ -23,43 +23,71 @@ jobs:
           submodules: recursive
 
       - name: Setup MSVC Developer Environment
-        uses: llvm/actions/install-ninja@v1
+        uses: ilammy/msvc-dev-cmd@v1
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: '3.11'
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.47.4'
+          flutter-version: '3.24.0'
           channel: stable
           cache: true
 
       - name: Setup vcpkg and Dependencies
+        shell: pwsh
         run: |
-          cd C:\vcpkg
-          git pull
-          .\bootstrap-vcpkg.bat
-          .\vcpkg integrate install
+          if (-not (Test-Path $env:VCPKG_ROOT)) {
+            git clone https://github.com/microsoft/vcpkg $env:VCPKG_ROOT
+          }
+
+          & "$env:VCPKG_ROOT\bootstrap-vcpkg.bat"
+
+          & "$env:VCPKG_ROOT\vcpkg.exe" install `
+            opus `
+            libvpx `
+            aom `
+            --triplet x64-windows
 
       - name: Install LLVM
-        run: choco install llvm -y
+        shell: pwsh
+        run: |
+          choco install llvm -y
 
       - name: Add LLVM to PATH
-        run: echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
+        shell: pwsh
+        run: |
+          "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Flutter Rust Bridge Codegen
-        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
+        shell: pwsh
+        run: |
+          cargo install flutter_rust_bridge_codegen
 
       - name: Flutter Rust Bridge Codegen
-        run: flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart
+        shell: pwsh
+        run: |
+          flutter pub get
+          flutter_rust_bridge_codegen generate
 
       - name: Run Build Script
-        run: python build.py
+        shell: pwsh
+        run: |
+          python build.py --flutter --hwcodec --vram
+
+      - name: Upload Binaries
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-windows-binaries
+          path: |
+            target/release/*.exe
+            target/release/*.dll
+            build/windows/x64/runner/Release/**
+          if-no-files-found: warn
