@@ -14,8 +14,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -33,7 +31,6 @@ jobs:
         with:
           flutter-version: "3.24.5"
           channel: stable
-          cache: true
 
       - name: Setup vcpkg and Dependencies
         shell: pwsh
@@ -50,9 +47,7 @@ jobs:
           echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
 
       - name: Install Flutter Rust Bridge Codegen
-        shell: pwsh
-        run: |
-          cargo install flutter_rust_bridge_codegen --version 1.80.1
+        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
 
       - name: Flutter Rust Bridge Codegen
         shell: pwsh
@@ -62,45 +57,101 @@ jobs:
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
+          $ErrorActionPreference = "Continue"
           cargo fetch
           $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
-          
-          # Patch util.cpp
+          Write-Host "checkoutRoot = $checkoutRoot"
+
+          # =========================================================
+          # 1) util.cpp  ->  FF_PROFILE_* shim  (این بخش در ران قبل موفق بود)
+          # =========================================================
           $utilFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter util.cpp -ErrorAction SilentlyContinue
           foreach ($file in $utilFiles) {
-            Write-Host "Patching: $($file.FullName)"
             $content = Get-Content $file.FullName -Raw
             if ($content -notmatch "AV_PROFILE_H264_HIGH") {
-              $shim = @"
-          #ifndef FF_PROFILE_H264_HIGH
-          #define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH
-          #endif
-          #ifndef FF_PROFILE_HEVC_MAIN
-          #define FF_PROFILE_HEVC_MAIN AV_PROFILE_HEVC_MAIN
-          #endif
-
-          "@
-              $content = $shim + $content
-              Set-Content -Path $file.FullName -Value $content -NoNewline
+              Write-Host "Patching (FF_PROFILE shim): $($file.FullName)"
+              $shimLines = @(
+                '#ifndef FF_PROFILE_H264_HIGH',
+                '#define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH',
+                '#endif',
+                '#ifndef FF_PROFILE_HEVC_MAIN',
+                '#define FF_PROFILE_HEVC_MAIN AV_PROFILE_HEVC_MAIN',
+                '#endif',
+                ''
+              )
+              $shim = ($shimLines -join "`r`n") + "`r`n"
+              Set-Content -Path $file.FullName -Value ($shim + $content) -NoNewline
+            }
+            else {
+              Write-Host "Skipping (already patched): $($file.FullName)"
             }
           }
-          
-          # Patch ffmpeg_ram_decode.cpp
+
+          # =========================================================
+          # 2) ffmpeg_ram_decode.cpp  ->  key_frame  ==>  AV_FRAME_FLAG_KEY
+          # =========================================================
           $decodeFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter ffmpeg_ram_decode.cpp -ErrorAction SilentlyContinue
+          if (-not $decodeFiles) { Write-Host "!! ffmpeg_ram_decode.cpp NOT FOUND under $checkoutRoot" }
+
           foreach ($file in $decodeFiles) {
-            Write-Host "Patching: $($file.FullName)"
+            Write-Host "==== Patching: $($file.FullName) ===="
+
+            # ---------- DIAGNOSTIC (before patch) ----------
+            $lines = @(Get-Content $file.FullName)
+            Write-Host ("total lines: {0}" -f $lines.Count)
+            $hits = 0
+            for ($i = 0; $i -lt $lines.Count; $i++) {
+              if ($lines[$i] -match 'key_frame') {
+                $hits++
+                Write-Host ("BEFORE  line {0}: {1}" -f ($i + 1), $lines[$i].Trim())
+              }
+            }
+            Write-Host ("BEFORE  total 'key_frame' occurrences: {0}" -f $hits)
+            if ($lines.Count -ge 218) {
+              Write-Host ("LINE 218 RAW: {0}" -f $lines[217].Trim())
+            }
+
+            # ---------- PATCH ----------
             $content = Get-Content $file.FullName -Raw
-            $content = $content -replace 'frame->key_frame', '((frame->flags & AV_FRAME_FLAG_KEY) != 0)'
+
+            # الگوی عمومی: هر عبارت دسترسی به عضو (هر نام متغیر، ایندکس، زنجیره -> یا .)
+            $member = '([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[[^\]]*\])*)\s*(->|\.)\s*key_frame\b'
+
+            # 2a) نوشتن:  X->key_frame = expr;
+            $content = $content -replace "$member\s*=(?!=)\s*([^;]+);", '${1}${2}flags = (${3}) ? (${1}${2}flags | AV_FRAME_FLAG_KEY) : (${1}${2}flags & ~AV_FRAME_FLAG_KEY);'
+
+            # 2b) خواندن:  X->key_frame  /  X.key_frame
+            $content = $content -replace $member, '(((${1}${2}flags & AV_FRAME_FLAG_KEY) != 0))'
+
             Set-Content -Path $file.FullName -Value $content -NoNewline
+
+            # ---------- VERIFY (after patch) ----------
+            Write-Host "---- AFTER: lines containing AV_FRAME_FLAG_KEY ----"
+            Select-String -Path $file.FullName -Pattern 'AV_FRAME_FLAG_KEY' -ErrorAction SilentlyContinue |
+              ForEach-Object { Write-Host ("AFTER   line {0}: {1}" -f $_.LineNumber, $_.Line.Trim()) }
+
+            $left = Select-String -Path $file.FullName -Pattern 'key_frame' -ErrorAction SilentlyContinue
+            if ($left) {
+              $left | ForEach-Object { Write-Host ("REMAINING line {0}: {1}" -f $_.LineNumber, $_.Line.Trim()) }
+            }
+            else {
+              Write-Host "OK: no 'key_frame' left in this file."
+            }
           }
+
+          # ---------- اطلاعاتی: بقیه فایل‌های hwcodec که key_frame دارند (پچ نمی‌شوند) ----------
+          Write-Host "---- informational: other hwcodec sources containing 'key_frame' ----"
+          Get-ChildItem -Path $checkoutRoot -Recurse -Include *.cpp,*.h,*.hpp -ErrorAction SilentlyContinue |
+            Where-Object { $_.FullName -match 'hwcodec' -and $_.Name -ne 'ffmpeg_ram_decode.cpp' } |
+            Select-String -Pattern 'key_frame' -ErrorAction SilentlyContinue |
+            Select-Object -First 20 |
+            ForEach-Object { Write-Host ("OTHER   {0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
 
       - name: Run build.py directly
         shell: cmd
         env:
-          VCPKG_ROOT: C:\vcpkg
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-          RUST_BACKTRACE: "full"
         run: |
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
@@ -115,16 +166,4 @@ jobs:
             build-full.log
             build-stdout.log
             build-stderr.log
-          if-no-files-found: ignore
-
-      - name: Upload Binaries
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenet-windows-binaries
-          path: |
-            target/release/librustdesk.dll
-            target/release/dylib_virtual_display.dll
-            target/release/deps/dylib_virtual_display.dll
-            flutter/build/windows/x64/runner/Release/**
           if-no-files-found: ignore
