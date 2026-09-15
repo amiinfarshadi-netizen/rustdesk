@@ -59,6 +59,41 @@ jobs:
         run: |
           flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart || true
 
+      - name: Patch hwcodec for newer FFmpeg
+        shell: pwsh
+        run: |
+          cargo fetch
+          $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
+          
+          # Patch util.cpp
+          $utilFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter util.cpp -ErrorAction SilentlyContinue
+          foreach ($file in $utilFiles) {
+            Write-Host "Patching: $($file.FullName)"
+            $content = Get-Content $file.FullName -Raw
+            if ($content -notmatch "AV_PROFILE_H264_HIGH") {
+              $shim = @"
+          #ifndef FF_PROFILE_H264_HIGH
+          #define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH
+          #endif
+          #ifndef FF_PROFILE_HEVC_MAIN
+          #define FF_PROFILE_HEVC_MAIN AV_PROFILE_HEVC_MAIN
+          #endif
+
+          "@
+              $content = $shim + $content
+              Set-Content -Path $file.FullName -Value $content -NoNewline
+            }
+          }
+          
+          # Patch ffmpeg_ram_decode.cpp
+          $decodeFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter ffmpeg_ram_decode.cpp -ErrorAction SilentlyContinue
+          foreach ($file in $decodeFiles) {
+            Write-Host "Patching: $($file.FullName)"
+            $content = Get-Content $file.FullName -Raw
+            $content = $content -replace 'frame->key_frame', '((frame->flags & AV_FRAME_FLAG_KEY) != 0)'
+            Set-Content -Path $file.FullName -Value $content -NoNewline
+          }
+
       - name: Run build.py directly
         shell: cmd
         env:
