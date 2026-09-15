@@ -1,25 +1,25 @@
 name: BeeNet Windows Build
 
 on:
-  push:
-    branches: [ main, master ]
-  pull_request:
-    branches: [ main, master ]
   workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
 
 jobs:
-  build:
+  build-windows:
     runs-on: windows-2022
+    timeout-minutes: 120
+
     env:
       VCPKG_ROOT: C:\vcpkg
-      VCPKGRS_DYNAMIC: "0"
-      VCPKG_DEFAULT_TRIPLET: x64-windows-static
+      VCPKG_INSTALLATION_ROOT: C:\vcpkg
+      RUST_BACKTRACE: 1
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -34,33 +34,47 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: x86_64-pc-windows-msvc
+          toolchain: stable
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
           channel: stable
 
       - name: Setup vcpkg and Dependencies
         shell: powershell
         run: |
-          & "C:\vcpkg\vcpkg.exe" install --classic libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+          if (!(Test-Path "C:\vcpkg")) {
+            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
+          }
+
+          & "C:\vcpkg\bootstrap-vcpkg.bat"
+
+          & "C:\vcpkg\vcpkg.exe" install --classic `
+            libvpx:x64-windows-static `
+            libyuv:x64-windows-static `
+            opus:x64-windows-static `
+            aom:x64-windows-static
 
       - name: Install LLVM
         shell: powershell
         run: |
           choco install llvm -y
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Add LLVM to PATH
+        shell: powershell
+        run: |
+          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+
+      - name: Install Flutter Rust Bridge Codegen
+        shell: powershell
+        run: |
+          dart pub global activate flutter_rust_bridge_codegen
 
       - name: Flutter Rust Bridge Codegen
         shell: powershell
         run: |
-          cd flutter
-          flutter pub get
-          cd ..
-          cargo install flutter_rust_bridge_codegen --version 1.80.1
-          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
+          flutter_rust_bridge_codegen generate
 
       - name: Run Build Script
         shell: powershell
@@ -71,8 +85,9 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: beenet-windows-binaries
+          name: beenetdesk-windows-binaries
           path: |
             target/release/*.exe
             target/release/*.dll
             flutter/build/windows/x64/runner/Release/**
+          if-no-files-found: ignore
