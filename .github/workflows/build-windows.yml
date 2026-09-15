@@ -20,6 +20,8 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive  # <--- این خط برای حل مشکل حیاتی است
 
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
