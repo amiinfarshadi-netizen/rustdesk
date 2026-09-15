@@ -8,14 +8,14 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-      # ۱. دریافت کامل ریپوزیتوری به همراه تمام ساب‌ماژول‌ها
+      # ۱. دریافت ریپوزیتوری و ساب‌ماژول‌ها
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ۲. تنظیم محیط کامپایلر MSVC x64
+      # ۲. تنظیم محیط MSVC x64
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -31,14 +31,14 @@ jobs:
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # ۵. تنظیم فریم‌ورک Flutter
+      # ۵. تنظیم Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
           channel: stable
 
-      # ۶. نصب پکیج‌های vcpkg در حالت Classic برای دور زدن Manifest Mode و تنظیم متغیرهای محیطی
+      # ۶. نصب وابستگی‌های FFmpeg از طریق vcpkg و تنظیم PATH/INCLUDE/LIB
       - name: Setup vcpkg and FFmpeg Dependencies
         shell: pwsh
         run: |
@@ -64,13 +64,13 @@ jobs:
           echo "LIB=$vcpkgLib;$env:LIB" >> $env:GITHUB_ENV
           echo "FFMPEG_DIR=$vcpkgDir\installed\x64-windows-static" >> $env:GITHUB_ENV
 
-      # ۷. دریافت کرت‌های وابستگی پروژه
+      # ۷. دریافت سورس وابستگی‌ها
       - name: Fetch Cargo Dependencies
         shell: pwsh
         run: |
           cargo fetch
 
-      # ۸. اعمال پچ‌های سازگاری hwcodec (اصلاح key_frame و تزریق شیم‌های FF_PROFILE)
+      # ۸. پچ جامع hwcodec برای سازگاری کامل با نسخه‌های جدید FFmpeg
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
@@ -81,7 +81,7 @@ jobs:
               exit 1
           }
 
-          # پچ فیلد key_frame
+          # پچ key_frame
           $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
           foreach ($f in $ramFiles) {
               Write-Host "Patching key_frame in: $($f.FullName)"
@@ -91,18 +91,27 @@ jobs:
               Write-Host "-> Successfully patched key_frame"
           }
 
-          # تزریق شیم ثوابت FF_PROFILE
+          # تزریق شیم کامل ثوابت به util.cpp
           $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
           foreach ($f in $utilFiles) {
               Write-Host "Patching FF_PROFILE in: $($f.FullName)"
               $content = Get-Content $f.FullName -Raw
-              if ($content -notmatch "FF_PROFILE_HEVC_MAIN_10") {
+              if ($content -notmatch "FF_PROFILE_H264_HIGH") {
                   $shim = @"
-          #ifndef FF_PROFILE_HEVC_MAIN_10
-          #define FF_PROFILE_HEVC_MAIN_10 2
+          #ifndef FF_PROFILE_H264_BASELINE
+          #define FF_PROFILE_H264_BASELINE 66
+          #endif
+          #ifndef FF_PROFILE_H264_MAIN
+          #define FF_PROFILE_H264_MAIN 77
+          #endif
+          #ifndef FF_PROFILE_H264_HIGH
+          #define FF_PROFILE_H264_HIGH 100
           #endif
           #ifndef FF_PROFILE_HEVC_MAIN
           #define FF_PROFILE_HEVC_MAIN 1
+          #endif
+          #ifndef FF_PROFILE_HEVC_MAIN_10
+          #define FF_PROFILE_HEVC_MAIN_10 2
           #endif
           #ifndef FF_PROFILE_AAC_LOW
           #define FF_PROFILE_AAC_LOW 1
@@ -110,11 +119,11 @@ jobs:
           "@
                   $content = $shim + "`n" + $content
                   Set-Content -Path $f.FullName -Value $content -NoNewline
-                  Write-Host "-> Injected FF_PROFILE shim"
+                  Write-Host "-> Injected complete FF_PROFILE shim"
               }
           }
 
-      # ۹. اجرای مستقیم اسکریپت بیلد پروژه
+      # ۹. اجرای مستقیم اسکریپت بیلد
       - name: Run build.py directly
         shell: cmd
         env:
@@ -126,7 +135,7 @@ jobs:
           echo EXITCODE=%ERRORLEVEL%
           exit %ERRORLEVEL%
 
-      # ۱۰. آپلود خروجی‌ها و فایل‌های اجرایی در صورت موفقیت
+      # ۱۰. آپلود خروجی‌ها (فایل‌های exe و dll)
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -138,7 +147,7 @@ jobs:
             build/windows/runner/Release/*
           if-no-files-found: ignore
 
-      # ۱۱. ذخیره لاگ‌های کامل در صورت بروز هرگونه خطای احتمالی
+      # ۱۱. ذخیره لاگ‌ها در صورت بروز خطا
       - name: Upload Logs on Failure
         if: always()
         uses: actions/upload-artifact@v4
