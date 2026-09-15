@@ -7,156 +7,132 @@ on:
 jobs:
   build:
     runs-on: windows-2022
-    env:
-      VCPKG_ROOT: C:\vcpkg
-      RUST_BACKTRACE: full
-
     steps:
+      # ۱. چک‌اوت ریپوزیتوری همراه با بازخوانی کامل ساب‌ماژول‌ها (رفع خطای os error 2)
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
+      # ۲. تنظیم محیط MSVC برای کامپایل C++ / vcpkg
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
 
+      # ۳. تنظیم پایتون
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # ۴. تنظیم ابزارهای Rust
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
+      # ۵. تنظیم Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
           channel: stable
 
-      - name: Setup vcpkg and Dependencies
+      # ۶. دانلود وابستگی‌های Workspace (مرحله ایمنی برای اطمینان از وجود فایل‌های کرت)
+      - name: Update Submodules & Fetch Cargo Dependencies
         shell: pwsh
         run: |
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
-          cd C:\vcpkg
-          .\vcpkg.exe integrate install
-          .\vcpkg.exe install opus libvpx aom ffmpeg --triplet x64-windows-static
+          git submodule update --init --recursive
+          cargo fetch
 
-      - name: Install LLVM
-        shell: pwsh
-        run: |
-          choco install llvm -y --no-progress
-          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-
-      - name: Install Flutter Rust Bridge Codegen
-        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
-
-      - name: Flutter Rust Bridge Codegen
-        shell: pwsh
-        run: |
-          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart || true
-
+      # ۷. اعمال پچ دقیق روی hwcodec برای سازگاری با FFmpeg جدید و کدویجوال استودیو
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          cargo fetch
-          $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
-          Write-Host "checkoutRoot = $checkoutRoot"
-
-          # =========================================================
-          # 1) util.cpp  ->  FF_PROFILE_* shim  (این بخش در ران قبل موفق بود)
-          # =========================================================
-          $utilFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter util.cpp -ErrorAction SilentlyContinue
-          foreach ($file in $utilFiles) {
-            $content = Get-Content $file.FullName -Raw
-            if ($content -notmatch "AV_PROFILE_H264_HIGH") {
-              Write-Host "Patching (FF_PROFILE shim): $($file.FullName)"
-              $shimLines = @(
-                '#ifndef FF_PROFILE_H264_HIGH',
-                '#define FF_PROFILE_H264_HIGH AV_PROFILE_H264_HIGH',
-                '#endif',
-                '#ifndef FF_PROFILE_HEVC_MAIN',
-                '#define FF_PROFILE_HEVC_MAIN AV_PROFILE_HEVC_MAIN',
-                '#endif',
-                ''
-              )
-              $shim = ($shimLines -join "`r`n") + "`r`n"
-              Set-Content -Path $file.FullName -Value ($shim + $content) -NoNewline
-            }
-            else {
-              Write-Host "Skipping (already patched): $($file.FullName)"
-            }
+          
+          # پیدا کردن مسیر کرت hwcodec در کش cargo
+          $checkouts = "$env:USERPROFILE\.cargo\git\checkouts"
+          if (-not (Test-Path $checkouts)) {
+              Write-Host "!! Cargo checkouts directory not found: $checkouts"
+              exit 1
           }
 
-          # =========================================================
-          # 2) ffmpeg_ram_decode.cpp  ->  key_frame  ==>  AV_FRAME_FLAG_KEY
-          # =========================================================
-          $decodeFiles = Get-ChildItem -Path $checkoutRoot -Recurse -Filter ffmpeg_ram_decode.cpp -ErrorAction SilentlyContinue
-          if (-not $decodeFiles) { Write-Host "!! ffmpeg_ram_decode.cpp NOT FOUND under $checkoutRoot" }
-
-          foreach ($file in $decodeFiles) {
-            Write-Host "==== Patching: $($file.FullName) ===="
-
-            # ---------- DIAGNOSTIC (before patch) ----------
-            $lines = @(Get-Content $file.FullName)
-            Write-Host ("total lines: {0}" -f $lines.Count)
-            $hits = 0
-            for ($i = 0; $i -lt $lines.Count; $i++) {
-              if ($lines[$i] -match 'key_frame') {
-                $hits++
-                Write-Host ("BEFORE  line {0}: {1}" -f ($i + 1), $lines[$i].Trim())
+          # ۱. پچ فایل util.cpp برای تعریف ثابت‌های FF_PROFILE (رفع خطاهای C2065/C2039)
+          $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Path { $_.FullName -like "*hwcodec*" }
+          foreach ($f in $utilFiles) {
+              Write-Host "Patching FF_PROFILE in: $($f.FullName)"
+              $content = Get-Content $f.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_HEVC_MAIN_10") {
+                  $shim = @"
+          #ifndef FF_PROFILE_HEVC_MAIN_10
+          #define FF_PROFILE_HEVC_MAIN_10 2
+          #endif
+          #ifndef FF_PROFILE_HEVC_MAIN
+          #define FF_PROFILE_HEVC_MAIN 1
+          #endif
+          #ifndef FF_PROFILE_AAC_LOW
+          #define FF_PROFILE_AAC_LOW 1
+          #endif
+          "@
+                  $content = $shim + "`n" + $content
+                  Set-Content -Path $f.FullName -Value $content -NoNewline
+                  Write-Host "-> Successfully injected FF_PROFILE defines into util.cpp"
               }
-            }
-            Write-Host ("BEFORE  total 'key_frame' occurrences: {0}" -f $hits)
-            if ($lines.Count -ge 218) {
-              Write-Host ("LINE 218 RAW: {0}" -f $lines[217].Trim())
-            }
-
-            # ---------- PATCH ----------
-            $content = Get-Content $file.FullName -Raw
-
-            # الگوی عمومی: هر عبارت دسترسی به عضو (هر نام متغیر، ایندکس، زنجیره -> یا .)
-            $member = '([A-Za-z_]\w*(?:\s*(?:->|\.)\s*[A-Za-z_]\w*|\s*\[[^\]]*\])*)\s*(->|\.)\s*key_frame\b'
-
-            # 2a) نوشتن:  X->key_frame = expr;
-            $content = $content -replace "$member\s*=(?!=)\s*([^;]+);", '${1}${2}flags = (${3}) ? (${1}${2}flags | AV_FRAME_FLAG_KEY) : (${1}${2}flags & ~AV_FRAME_FLAG_KEY);'
-
-            # 2b) خواندن:  X->key_frame  /  X.key_frame
-            $content = $content -replace $member, '(((${1}${2}flags & AV_FRAME_FLAG_KEY) != 0))'
-
-            Set-Content -Path $file.FullName -Value $content -NoNewline
-
-            # ---------- VERIFY (after patch) ----------
-            Write-Host "---- AFTER: lines containing AV_FRAME_FLAG_KEY ----"
-            Select-String -Path $file.FullName -Pattern 'AV_FRAME_FLAG_KEY' -ErrorAction SilentlyContinue |
-              ForEach-Object { Write-Host ("AFTER   line {0}: {1}" -f $_.LineNumber, $_.Line.Trim()) }
-
-            $left = Select-String -Path $file.FullName -Pattern 'key_frame' -ErrorAction SilentlyContinue
-            if ($left) {
-              $left | ForEach-Object { Write-Host ("REMAINING line {0}: {1}" -f $_.LineNumber, $_.Line.Trim()) }
-            }
-            else {
-              Write-Host "OK: no 'key_frame' left in this file."
-            }
           }
 
-          # ---------- اطلاعاتی: بقیه فایل‌های hwcodec که key_frame دارند (پچ نمی‌شوند) ----------
-          Write-Host "---- informational: other hwcodec sources containing 'key_frame' ----"
-          Get-ChildItem -Path $checkoutRoot -Recurse -Include *.cpp,*.h,*.hpp -ErrorAction SilentlyContinue |
-            Where-Object { $_.FullName -match 'hwcodec' -and $_.Name -ne 'ffmpeg_ram_decode.cpp' } |
-            Select-String -Pattern 'key_frame' -ErrorAction SilentlyContinue |
-            Select-Object -First 20 |
-            ForEach-Object { Write-Host ("OTHER   {0}:{1}: {2}" -f $_.Path, $_.LineNumber, $_.Line.Trim()) }
+          # ۲. پچ فایل ffmpeg_ram_decode.cpp (جایگزینی key_frame با AV_FRAME_FLAG_KEY)
+          $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Path { $_.FullName -like "*hwcodec*" }
+          foreach ($f in $ramFiles) {
+              Write-Host "Patching key_frame in: $($f.FullName)"
+              $lines = Get-Content $f.FullName
+              
+              # ثبت وضعیت خط قبل از پچ (Diagnostic LOG)
+              $beforeMatches = Select-String -Path $f.FullName -Pattern "key_frame"
+              if ($beforeMatches) {
+                  Write-Host "BEFORE PATCH MATCHES:"
+                  $beforeMatches | ForEach-Object { Write-Host "Line $($_.LineNumber): $($_.Line)" }
+              }
 
+              # اعمال تغییر با الگوی Regex مطمئن
+              $rawContent = Get-Content $f.FullName -Raw
+              $patchedContent = $rawContent -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+              Set-Content -Path $f.FullName -Value $patchedContent -NoNewline
+              Write-Host "-> Applied key_frame regex patch to ffmpeg_ram_decode.cpp"
+
+              # بررسی وضعیت پس از اعمال پچ
+              $afterMatches = Select-String -Path $f.FullName -Pattern "key_frame"
+              if ($afterMatches) {
+                  Write-Host "REMAINING key_frame OCCURRENCES:"
+                  $afterMatches | ForEach-Object { Write-Host "Line $($_.LineNumber): $($_.Line)" }
+              } else {
+                  Write-Host "-> All key_frame references successfully patched!"
+              }
+          }
+
+      # ۸. اجرای اسکریپت اصلی بیلد پروژه
       - name: Run build.py directly
         shell: cmd
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
         run: |
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
           exit %ERRORLEVEL%
 
+      # ۹. آپلود فایل‌های اجرایی تولیدشده (خروجی موفقیت‌آمیز)
+      - name: Upload Artifacts
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenetdesk-windows-binaries
+          path: |
+            target/release/*.dll
+            target/release/*.exe
+            build/windows/runner/Release/*
+          if-no-files-found: ignore
+
+      # ۱۰. آپلود لاگ‌ها در صورت بروز خطا (دیباگ فوری)
       - name: Upload Logs on Failure
         if: always()
         uses: actions/upload-artifact@v4
