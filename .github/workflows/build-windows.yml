@@ -8,16 +8,18 @@ jobs:
   build:
     runs-on: windows-2022
     steps:
-      # ۱. چک‌اوت ریپوزیتوری همراه با بازخوانی کامل ساب‌ماژول‌ها (رفع خطای os error 2)
+      # ۱. دریافت کامل ریپوزیتوری و تمام ساب‌ماژول‌ها
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ۲. تنظیم محیط MSVC برای کامپایل C++ / vcpkg
+      # ۲. تنظیم محیط خط فرمان MSVC
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
       # ۳. تنظیم پایتون
       - name: Setup Python
@@ -25,7 +27,7 @@ jobs:
         with:
           python-version: "3.11"
 
-      # ۴. تنظیم ابزارهای Rust
+      # ۴. تنظیم Rust
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
@@ -36,28 +38,61 @@ jobs:
           flutter-version: "3.24.5"
           channel: stable
 
-      # ۶. دانلود وابستگی‌های Workspace (مرحله ایمنی برای اطمینان از وجود فایل‌های کرت)
-      - name: Update Submodules & Fetch Cargo Dependencies
+      # ۶. نصب وابستگی‌های FFmpeg از طریق vcpkg و تنظیم متغیرهای محیطی INCLUDE و LIB
+      - name: Setup vcpkg and FFmpeg Dependencies
         shell: pwsh
         run: |
-          git submodule update --init --recursive
+          $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT"
+          if (-not (Test-Path $vcpkgDir)) {
+              $vcpkgDir = "C:\vcpkg"
+          }
+          Write-Host "Using vcpkg from: $vcpkgDir"
+          
+          # نصب بسته‌های مورد نیاز FFmpeg و وابستگی‌ها برای کامپایل استاتیک
+          & "$vcpkgDir\vcpkg.exe" integrate install
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --recurse
+
+          $vcpkgInclude = "$vcpkgDir\installed\x64-windows-static\include"
+          $vcpkgLib = "$vcpkgDir\installed\x64-windows-static\lib"
+
+          # تزریق مسیرها به متغیرهای سیستمی جهت شناسایی مستقیم توسط cl.exe و link.exe
+          Write-Host "Adding to INCLUDE: $vcpkgInclude"
+          Write-Host "Adding to LIB: $vcpkgLib"
+          
+          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
+          echo "INCLUDE=$vcpkgInclude;$env:INCLUDE" >> $env:GITHUB_ENV
+          echo "LIB=$vcpkgLib;$env:LIB" >> $env:GITHUB_ENV
+          echo "FFMPEG_DIR=$vcpkgDir\installed\x64-windows-static" >> $env:GITHUB_ENV
+
+      # ۷. دریافت کرت‌های وابسته Cargo
+      - name: Fetch Cargo Dependencies
+        shell: pwsh
+        run: |
           cargo fetch
 
-      # ۷. اعمال پچ دقیق روی hwcodec برای سازگاری با FFmpeg جدید و کدویجوال استودیو
+      # ۸. اعمال پچ‌های سازگاری hwcodec (شیم FF_PROFILE و اصلاح فیلد key_frame)
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
           $ErrorActionPreference = "Continue"
-          
-          # پیدا کردن مسیر کرت hwcodec در کش cargo
           $checkouts = "$env:USERPROFILE\.cargo\git\checkouts"
           if (-not (Test-Path $checkouts)) {
               Write-Host "!! Cargo checkouts directory not found: $checkouts"
               exit 1
           }
 
-          # ۱. پچ فایل util.cpp برای تعریف ثابت‌های FF_PROFILE (رفع خطاهای C2065/C2039)
-          $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Path { $_.FullName -like "*hwcodec*" }
+          # ۱. پچ فیلد key_frame در فایل ffmpeg_ram_decode.cpp
+          $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
+          foreach ($f in $ramFiles) {
+              Write-Host "Patching key_frame in: $($f.FullName)"
+              $rawContent = Get-Content $f.FullName -Raw
+              $patchedContent = $rawContent -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+              Set-Content -Path $f.FullName -Value $patchedContent -NoNewline
+              Write-Host "-> Successfully patched key_frame"
+          }
+
+          # ۲. تزریق شیم ثوابت FF_PROFILE در util.cpp
+          $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
           foreach ($f in $utilFiles) {
               Write-Host "Patching FF_PROFILE in: $($f.FullName)"
               $content = Get-Content $f.FullName -Raw
@@ -75,40 +110,11 @@ jobs:
           "@
                   $content = $shim + "`n" + $content
                   Set-Content -Path $f.FullName -Value $content -NoNewline
-                  Write-Host "-> Successfully injected FF_PROFILE defines into util.cpp"
+                  Write-Host "-> Injected FF_PROFILE shim"
               }
           }
 
-          # ۲. پچ فایل ffmpeg_ram_decode.cpp (جایگزینی key_frame با AV_FRAME_FLAG_KEY)
-          $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Path { $_.FullName -like "*hwcodec*" }
-          foreach ($f in $ramFiles) {
-              Write-Host "Patching key_frame in: $($f.FullName)"
-              $lines = Get-Content $f.FullName
-              
-              # ثبت وضعیت خط قبل از پچ (Diagnostic LOG)
-              $beforeMatches = Select-String -Path $f.FullName -Pattern "key_frame"
-              if ($beforeMatches) {
-                  Write-Host "BEFORE PATCH MATCHES:"
-                  $beforeMatches | ForEach-Object { Write-Host "Line $($_.LineNumber): $($_.Line)" }
-              }
-
-              # اعمال تغییر با الگوی Regex مطمئن
-              $rawContent = Get-Content $f.FullName -Raw
-              $patchedContent = $rawContent -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
-              Set-Content -Path $f.FullName -Value $patchedContent -NoNewline
-              Write-Host "-> Applied key_frame regex patch to ffmpeg_ram_decode.cpp"
-
-              # بررسی وضعیت پس از اعمال پچ
-              $afterMatches = Select-String -Path $f.FullName -Pattern "key_frame"
-              if ($afterMatches) {
-                  Write-Host "REMAINING key_frame OCCURRENCES:"
-                  $afterMatches | ForEach-Object { Write-Host "Line $($_.LineNumber): $($_.Line)" }
-              } else {
-                  Write-Host "-> All key_frame references successfully patched!"
-              }
-          }
-
-      # ۸. اجرای اسکریپت اصلی بیلد پروژه
+      # ۹. اجرای اسکریپت اصلی بیلد
       - name: Run build.py directly
         shell: cmd
         env:
@@ -120,7 +126,7 @@ jobs:
           echo EXITCODE=%ERRORLEVEL%
           exit %ERRORLEVEL%
 
-      # ۹. آپلود فایل‌های اجرایی تولیدشده (خروجی موفقیت‌آمیز)
+      # ۱۰. ذخیره و آپلود باینری‌های نهایی تولید شده
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -132,7 +138,7 @@ jobs:
             build/windows/runner/Release/*
           if-no-files-found: ignore
 
-      # ۱۰. آپلود لاگ‌ها در صورت بروز خطا (دیباگ فوری)
+      # ۱۱. ذخیره لاگ‌ها در صورت بروز هرگونه خطای احتمالی
       - name: Upload Logs on Failure
         if: always()
         uses: actions/upload-artifact@v4
