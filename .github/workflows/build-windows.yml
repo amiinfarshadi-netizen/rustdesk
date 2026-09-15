@@ -1,96 +1,65 @@
-name: BeeNet Windows Build
+name: Build Windows Client
 
 on:
-  workflow_dispatch:
   push:
-    branches:
-      - master
-      - main
+    branches: [ master, main ]
+  pull_request:
+    branches: [ master, main ]
+  workflow_dispatch:
+
+env:
+  VCPKG_ROOT: C:\vcpkg
+  VCPKG_INSTALLATION_ROOT: C:\vcpkg
+  RUST_BACKTRACE: 1
 
 jobs:
   build-windows:
-    runs-on: windows-2022
-    timeout-minutes: 120
-
-    env:
-      VCPKG_ROOT: C:\vcpkg
-      VCPKG_INSTALLATION_ROOT: C:\vcpkg
-      RUST_BACKTRACE: 1
+    runs-on: windows-latest
 
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
-          submodules: recursive  # <--- این خط برای حل مشکل حیاتی است
+          submodules: recursive
 
       - name: Setup MSVC Developer Environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        uses: llvm/actions/install-ninja@v1
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: '3.10'
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: stable
+          targets: x86_64-pc-windows-msvc
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
+          flutter-version: '3.47.4'
           channel: stable
+          cache: true
 
       - name: Setup vcpkg and Dependencies
-        shell: powershell
         run: |
-          if (!(Test-Path "C:\vcpkg")) {
-            git clone https://github.com/microsoft/vcpkg.git C:\vcpkg
-          }
-          & "C:\vcpkg\bootstrap-vcpkg.bat"
-          & "C:\vcpkg\vcpkg.exe" install --classic `
-            libvpx:x64-windows-static `
-            libyuv:x64-windows-static `
-            opus:x64-windows-static `
-            aom:x64-windows-static
+          cd C:\vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat
+          .\vcpkg integrate install
 
       - name: Install LLVM
-        shell: powershell
-        run: |
-          choco install llvm -y
+        run: choco install llvm -y
 
       - name: Add LLVM to PATH
-        shell: powershell
-        run: |
-          echo "C:\Program Files\LLVM\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
+        run: echo "C:\Program Files\LLVM\bin" >> $env:GITHUB_PATH
 
       - name: Install Flutter Rust Bridge Codegen
-        shell: powershell
-        run: |
-          cargo install flutter_rust_bridge_codegen --version 1.80.1
+        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
 
       - name: Flutter Rust Bridge Codegen
-        shell: powershell
-        run: |
-          cd flutter
-          flutter pub get
-          cd ..
-          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
+        run: flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart
 
       - name: Run Build Script
-        shell: powershell
-        run: |
-          python build.py --flutter --skip-portable-pack
-
-      - name: Upload Binaries
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenetdesk-windows-binaries
-          path: |
-            target/release/*.exe
-            target/release/*.dll
-            flutter/build/windows/x64/runner/Release/**
-          if-no-files-found: ignore
+        run: python build.py
