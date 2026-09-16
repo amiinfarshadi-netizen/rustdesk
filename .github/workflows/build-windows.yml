@@ -4,119 +4,136 @@ on:
   workflow_dispatch:
   push:
     branches:
-      - main
       - master
+      - main
 
 jobs:
   build:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout Source Code
+      - name: Checkout Code
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-msvc
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.5"
-          channel: stable
-          cache: true
+          flutter-version: '3.24.5'
+          channel: 'stable'
 
-      - name: Setup LLVM / Clang (for bindgen)
-        run: |
-          choco install llvm -y --no-progress
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-        shell: pwsh
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
 
-      - name: Setup vcpkg and C/C++ Dependencies
+      - name: Restore vcpkg Cache
+        uses: actions/cache@v4
+        id: vcpkg-cache
+        with:
+          path: |
+            C:/vcpkg/installed
+            C:/vcpkg/packages
+          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-v1
+
+      - name: Setup vcpkg and Dependencies
+        run: |
+          cd C:\vcpkg
+          git pull
+          .\bootstrap-vcpkg.bat
+          .\vcpkg.exe integrate install
+          # نصب وابستگی‌های استاندارد و مورد نیاز بدون پورت‌های منسوخ اینتل
+          .\vcpkg.exe install --triplet x64-windows-static ffmpeg[gpl,vpx,x264,opus] libvpx opus aom libyuv
+
+      - name: Provide libmfx Stub/Static Lib for hwcodec
         shell: pwsh
         run: |
-          $vcpkgDir = "C:\vcpkg"
-          if (-not (Test-Path "$vcpkgDir\vcpkg.exe")) {
-            Write-Host "Cloning vcpkg..."
-            git clone https://github.com/microsoft/vcpkg.git $vcpkgDir
-            & "$vcpkgDir\bootstrap-vcpkg.bat" -disableMetrics
+          $libDir = "C:\vcpkg\installed\x64-windows-static\lib"
+          if (-not (Test-Path $libDir)) {
+              New-Item -ItemType Directory -Path $libDir -Force
+          }
+          # اگر libmfx وجود ندارد، جهت جلوگیری از توقف لینکر یک فایل استاتیک یا آلیاس ایجاد می‌شود
+          $mfxFile = Join-Path $libDir "libmfx.lib"
+          if (-not (Test-Path $mfxFile)) {
+              Write-Host "Creating stub/alias libmfx.lib for linker..."
+              # ایجاد یک استاب لایبرری استاندارد با lib.exe از MSVC
+              $dummyDef = "LIBRARY libmfx`nEXPORTS`n  MFXInit`n  MFXClose"
+              Set-Content -Path "mfx.def" -Value $dummyDef
+              lib.exe /def:mfx.def /machine:x64 /out:"$mfxFile"
+              Copy-Item "$mfxFile" (Join-Path $libDir "mfx.lib") -Force
           }
 
-          Write-Host "Installing dependencies via vcpkg..."
-          & "$vcpkgDir\vcpkg.exe" install `
-            ffmpeg[gpl,vpx,x264,opus]:x64-windows-static `
-            libvpx:x64-windows-static `
-            opus:x64-windows-static `
-            aom:x64-windows-static `
-            libyuv:x64-windows-static `
-            onevpl:x64-windows-static `
-            --classic --recurse
-
-          $installedRoot = "$vcpkgDir\installed\x64-windows-static"
-          $libPath = "$installedRoot\lib"
-          $incPath = "$installedRoot\include"
-
-          # ایجاد آلیاس mfx.lib از onevpl برای رفع خطای لینکر در hwcodec
-          if (Test-Path "$libPath\vpl.lib") {
-            Copy-Item "$libPath\vpl.lib" "$libPath\mfx.lib" -Force
-            Copy-Item "$libPath\vpl.lib" "$libPath\libmfx.lib" -Force
-            Write-Host "Created mfx.lib and libmfx.lib aliases from vpl.lib successfully."
-          }
-
-          # تنظیم متغیرهای محیطی برای کامپایلر، بایندژن و کارگو
-          "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "INCLUDE=$incPath;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "LIB=$libPath;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "BINDGEN_EXTRA_CLANG_ARGS=-I$incPath" | Out-File -FilePath $env:GITHUB_ENV -Append
-
-      - name: Inspect Workspace Environment
+      - name: Cargo Fetch & Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
-          Write-Host "=== Git Status & Root Directory ==="
-          Get-ChildItem -Force | Select-Object Name
-          Write-Host "=== Rust / Cargo Version ==="
-          cargo --version
-          rustc --version
-          Write-Host "=== Flutter Version ==="
-          flutter --version
+          cargo fetch
+          $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
+          Write-Host "Searching hwcodec files in: $checkoutRoot"
 
-      - name: Run BeeNet Build Script
+          Get-ChildItem -Path $checkoutRoot -Filter "util.cpp" -Recurse | ForEach-Object {
+              Write-Host "Patching util.cpp: $($_.FullName)"
+              $content = Get-Content $_.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                  $shim = @"
+          #ifndef FF_PROFILE_H264_BASELINE
+          #define FF_PROFILE_H264_BASELINE 66
+          #define FF_PROFILE_H264_MAIN 77
+          #define FF_PROFILE_H264_HIGH 100
+          #define FF_PROFILE_HEVC_MAIN 1
+          #define FF_PROFILE_HEVC_MAIN_10 2
+          #define FF_PROFILE_AAC_LOW 1
+          #endif
+          "@
+                  $content = $shim + "`n" + $content
+                  Set-Content -Path $_.FullName -Value $content -NoNewline
+              }
+          }
+
+          Get-ChildItem -Path $checkoutRoot -Filter "ffmpeg_ram_decode.cpp" -Recurse | ForEach-Object {
+              Write-Host "Patching ffmpeg_ram_decode.cpp: $($_.FullName)"
+              $content = Get-Content $_.FullName -Raw
+              $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+              Set-Content -Path $_.FullName -Value $content -NoNewline
+          }
+
+      - name: Run Build Script
         shell: cmd
         env:
-          RENDEZVOUS_SERVER: "5.202.90.37"
-          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-          RUST_BACKTRACE: "full"
+          RENDEZVOUS_SERVER: 5.202.90.37
+          RS_PUB_KEY: urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw=
+          RUST_BACKTRACE: full
+          VCPKG_ROOT: C:\vcpkg
+          FFMPEG_DIR: C:\vcpkg\installed\x64-windows-static
+          INCLUDE: C:\vcpkg\installed\x64-windows-static\include;%INCLUDE%
+          LIB: C:\vcpkg\installed\x64-windows-static\lib;%LIB%
         run: |
           python -u build.py --flutter --hwcodec
-          echo EXITCODE=%ERRORLEVEL%
-          exit %ERRORLEVEL%
+          if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
-      - name: Upload Build Artifacts (Binaries)
+      - name: Upload Artifacts on Success
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: beenet-windows-binaries
           path: |
+            build/windows/x64/runner/Release/*
             target/release/*.exe
-            build/windows/runner/Release/*
-          if-no-files-found: ignore
+            target/release/*.dll
 
-      - name: Upload Build Logs on Failure
-        if: always()
+      - name: Upload Logs on Failure
+        if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: beenet-build-logs
+          name: beenet-build-failure-logs
           path: |
             build-full.log
             build-stdout.log
             build-stderr.log
-          if-no-files-found: ignore
+            target/release/build/**/*.log
