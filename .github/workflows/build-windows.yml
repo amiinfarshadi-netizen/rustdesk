@@ -114,32 +114,6 @@ jobs:
         with:
           name: beenetdesk-windows-binaries
           path: |
-            target/releaseFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
-          foreach ($u in $utilFiles) {
-              $content = Get-Content $u.FullName -Raw
-              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
-                  Set-Content -Path $u.FullName -Value ($defines + $content)
-              }
-          }
-
-      - name: Run build.py directly
-        shell: cmd
-        env:
-          RENDEZVOUS_SERVER: "5.202.90.37"
-          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
-          RUST_BACKTRACE: "full"
-          BINDGEN_EXTRA_CLANG_ARGS: "-IC:/vcpkg/installed/x64-windows-static/include"
-        run: |
-          python -u build.py --flutter --hwcodec
-          echo EXITCODE=%ERRORLEVEL%
-          exit %ERRORLEVEL%
-
-      - name: Upload Binaries
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenetdesk-windows-binaries
-          path: |
             target/release/rustdesk.exe
             target/release/*.dll
             build/windows/x64/runner/Release/*
