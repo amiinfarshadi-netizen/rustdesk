@@ -1,11 +1,11 @@
 name: BeeNet Windows Build
 
 on:
-  push:
-    branches: [ master, main ]
-  pull_request:
-    branches: [ master, main ]
   workflow_dispatch:
+  push:
+    branches:
+      - master
+      - main
 
 jobs:
   build:
@@ -15,8 +15,6 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
-        with:
-          submodules: recursive
 
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -26,7 +24,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.11'
+          python-version: "3.11"
 
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -36,8 +34,10 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
-          channel: 'stable'
+          flutter-version: "3.24.5"
+          channel: stable
+          architecture: x64
+          cache: false
 
       - name: Setup vcpkg and Dependencies
         shell: pwsh
@@ -51,98 +51,83 @@ jobs:
           }
           Write-Host "Using vcpkg from: $vcpkgDir"
 
-          # 1. دور زدن محدودیت امنیتی گیت در رانر ویندوز
+          # 1. دور زدن محدودیت‌های امنیتی گیت در محیط CI
           git config --global --add safe.directory $vcpkgDir
 
-          # 2. سینک و آپدیت کامل vcpkg برای دریافت پورت‌های libaom و libyuv
+          # 2. سینک و به‌روزرسانی کامل مخزن vcpkg به آخرین نسخه
           Push-Location $vcpkgDir
           git fetch --all --tags --prune
           git reset --hard origin/master
           & ".\bootstrap-vcpkg.bat" -disableMetrics
           Pop-Location
 
-          # 3. رجیستر کردن پورت‌ها
+          # 3. رجیستر کردن پورت‌ها برای سیستم
           & "$vcpkgDir\vcpkg.exe" integrate install
 
-          # 4. نصب وابستگی‌های صوتی/تصویری مورد نیاز scrap و hwcodec
+          # 4. نصب پکیج‌ها (aom به جای libaom جهت رفع خطای پورت ناموجود)
           & "$vcpkgDir\vcpkg.exe" install `
               ffmpeg[gpl,vpx,x264,opus]:x64-windows-static `
               libvpx:x64-windows-static `
               opus:x64-windows-static `
-              libaom:x64-windows-static `
+              aom:x64-windows-static `
               libyuv:x64-windows-static `
               --classic --recurse
 
-          # 5. ست کردن متغیرهای محیطی برای bindgen و Cargo
+          # 5. ست کردن متغیرهای محیطی برای bindgen، کامپایلر MSVC و Cargo
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
-          echo "$installedRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Encoding utf8 -Append
-          echo "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
-          echo "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          "$installedRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Fetch Cargo Dependencies
-        shell: pwsh
+        shell: cmd
         run: |
           cargo fetch
 
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
+          # پچ سازگاری با API جدید FFmpeg در نسخه نصب‌شده توسط vcpkg
           $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
-          $hwcodecDirs = Get-ChildItem -Path "$cargoHome\registry\src" -Recurse -Directory -Filter "hwcodec-*" -ErrorAction SilentlyContinue
+          $hwcodecFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "ffmpeg_ram_decode.cpp" -ErrorAction SilentlyContinue
 
-          if (-not $hwcodecDirs) {
-              Write-Host "hwcodec crate not found in registry yet. Skipping patch step."
-              exit 0
+          foreach ($f in $hwcodecFiles) {
+              Write-Host "Patching key_frame in: $($f.FullName)"
+              (Get-Content $f.FullName) -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)' | Set-Content $f.FullName
           }
 
-          foreach ($dir in $hwcodecDirs) {
-              Write-Host "Found hwcodec in: $($dir.FullName)"
-
-              # 1. پچ سازگاری key_frame در فایل‌های cpp
-              $cppFiles = Get-ChildItem -Path $dir.FullName -Recurse -Filter "*.cpp"
-              foreach ($file in $cppFiles) {
-                  $content = Get-Content -Raw -Path $file.FullName
-                  if ($content -match "key_frame") {
-                      $updated = $content -replace '(?<!flags\s*&\s*AV_PKT_FLAG_KEY)(frame->key_frame\s*==\s*1)', '((frame->flags & AV_PKT_FLAG_KEY) != 0)'
-                      if ($updated -ne $content) {
-                          Set-Content -Path $file.FullName -Value $updated -NoNewline
-                          Write-Host "  -> Patched key_frame in $($file.Name)"
-                      }
-                  }
-              }
-
-              # 2. تزریق ایمن شیم تعاریف پروفایل‌های منسوخ‌شده FFmpeg
-              $utilFile = Get-ChildItem -Path $dir.FullName -Recurse -Filter "util.cpp" | Select-Object -First 1
-              if ($utilFile) {
-                  $utilContent = Get-Content -Raw -Path $utilFile.FullName
-                  if (-not ($utilContent -match "SHIM_FF_PROFILES_DEFINED")) {
-                      $shim = @"
-          #ifndef SHIM_FF_PROFILES_DEFINED
-          #define SHIM_FF_PROFILES_DEFINED
-          #ifndef FF_PROFILE_H264_HIGH
+          $utilFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
+          foreach ($u in $utilFiles) {
+              $content = Get-Content $u.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                  Write-Host "Injecting FF_PROFILE constants in: $($u.FullName)"
+                  $defines = @"
+          #ifndef FF_PROFILE_H264_BASELINE
+          #define FF_PROFILE_H264_BASELINE 66
+          #define FF_PROFILE_H264_MAIN 77
           #define FF_PROFILE_H264_HIGH 100
-          #endif
-          #ifndef FF_PROFILE_HEVC_MAIN
           #define FF_PROFILE_HEVC_MAIN 1
-          #endif
+          #define FF_PROFILE_HEVC_MAIN_10 2
+          #define FF_PROFILE_AAC_LOW 1
           #endif
           "@
-                      Set-Content -Path $utilFile.FullName -Value ($shim + "`r`n" + $utilContent) -NoNewline
-                      Write-Host "  -> FF_PROFILE shim injected into $($utilFile.Name)"
-                  }
+                  $newContent = $defines + "`r`n" + $content
+                  Set-Content -Path $u.FullName -Value $newContent
               }
           }
 
       - name: Run build.py directly
-        shell: pwsh
+        shell: cmd
         env:
-          RENDEZVOUS_SERVER: "api.beenet.pro"
-          RS_PUB_KEY: "4B1YmE2ZvZ0rA/r9O6UuG0wK6qK1G0fX/1WJt8uT0b8="
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
           RUST_BACKTRACE: "full"
         run: |
           python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
 
       - name: Upload Binaries
         if: success()
@@ -150,10 +135,10 @@ jobs:
         with:
           name: beenetdesk-windows-binaries
           path: |
+            target/release/rustdesk.exe
             target/release/*.dll
-            target/release/*.exe
-            build/windows/runner/Release/*
-          retention-days: 7
+            build/windows/x64/runner/Release/*
+          if-no-files-found: ignore
 
       - name: Upload Logs on Failure
         if: failure()
@@ -166,3 +151,5 @@ jobs:
             build-stderr.log
             target/release/build/**/*.log
           retention-days: 7
+          if-no-files-found: warn
+          compression-level: 6
