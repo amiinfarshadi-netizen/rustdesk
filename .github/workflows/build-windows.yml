@@ -86,21 +86,12 @@ jobs:
               (Get-Content $f.FullName) -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)' | Set-Content $f.FullName
           }
 
+          $defines = "#ifndef FF_PROFILE_H264_BASELINE`n#define FF_PROFILE_H264_BASELINE 66`n#define FF_PROFILE_H264_MAIN 77`n#define FF_PROFILE_H264_HIGH 100`n#define FF_PROFILE_HEVC_MAIN 1`n#define FF_PROFILE_HEVC_MAIN_10 2`n#define FF_PROFILE_AAC_LOW 1`n#endif`n"
           $utilFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
           foreach ($u in $utilFiles) {
               $content = Get-Content $u.FullName -Raw
               if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
-                  $defines = @"
-#ifndef FF_PROFILE_H264_BASELINE
-#define FF_PROFILE_H264_BASELINE 66
-#define FF_PROFILE_H264_MAIN 77
-#define FF_PROFILE_H264_HIGH 100
-#define FF_PROFILE_HEVC_MAIN 1
-#define FF_PROFILE_HEVC_MAIN_10 2
-#define FF_PROFILE_AAC_LOW 1
-#endif
-"@
-                  Set-Content -Path $u.FullName -Value ($defines + "`r`n" + $content)
+                  Set-Content -Path $u.FullName -Value ($defines + $content)
               }
           }
 
