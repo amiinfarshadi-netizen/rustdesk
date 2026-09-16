@@ -42,6 +42,13 @@ jobs:
           if (-not (Test-Path $vcpkgDir)) { $vcpkgDir = "C:\vcpkg" }
           Write-Host "Using vcpkg from: $vcpkgDir"
 
+          # Sync vcpkg ports and update executable
+          Push-Location $vcpkgDir
+          git fetch --all --tags
+          git reset --hard origin/master
+          & ".\bootstrap-vcpkg.bat" -disableMetrics
+          Pop-Location
+
           & "$vcpkgDir\vcpkg.exe" integrate install
           & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static libaom:x64-windows-static libyuv:x64-windows-static --classic --recurse
 
