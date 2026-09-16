@@ -1,1 +1,144 @@
+name: BeeNet Windows Build
 
+on:
+  workflow_dispatch: {}
+  push:
+    branches:
+      - master
+      - main
+
+jobs:
+  build:
+    name: Build Windows Client
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Setup MSVC Developer Environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Setup Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
+          architecture: x64
+          cache: false
+
+      - name: Setup vcpkg and Dependencies
+        shell: pwsh
+        run: |
+          $vcpkgDir = if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path $env:VCPKG_INSTALLATION_ROOT)) {
+              $env:VCPKG_INSTALLATION_ROOT
+          } elseif (Test-Path "C:\vcpkg") {
+              "C:\vcpkg"
+          } else {
+              throw "vcpkg directory not found."
+          }
+          Write-Host "Using vcpkg from: $vcpkgDir"
+
+          git config --global --add safe.directory $vcpkgDir
+
+          Push-Location $vcpkgDir
+          git fetch --all --tags --prune
+          git reset --hard origin/master
+          & ".\bootstrap-vcpkg.bat" -disableMetrics
+          Pop-Location
+
+          & "$vcpkgDir\vcpkg.exe" integrate install
+
+          # پکیج‌های پایدار بدون پورت‌های مفقود
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
+
+          $installedRoot = "$vcpkgDir\installed\x64-windows-static"
+          "$installedRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Fetch Cargo Dependencies
+        shell: cmd
+        run: |
+          cargo fetch
+
+      - name: Patch hwcodec for newer FFmpeg
+        shell: pwsh
+        run: |
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
+          $hwcodecFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "ffmpeg_ram_decode.cpp" -ErrorAction SilentlyContinue
+
+          foreach ($f in $hwcodecFiles) {
+              Write-Host "Patching key_frame in: $($f.FullName)"
+              (Get-Content $f.FullName) -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)' | Set-Content $f.FullName
+          }
+
+          $utilFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
+          foreach ($u in $utilFiles) {
+              $content = Get-Content $u.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                  Write-Host "Injecting FF_PROFILE constants in: $($u.FullName)"
+                  $defines = @"
+          #ifndef FF_PROFILE_H264_BASELINE
+          #define FF_PROFILE_H264_BASELINE 66
+          #define FF_PROFILE_H264_MAIN 77
+          #define FF_PROFILE_H264_HIGH 100
+          #define FF_PROFILE_HEVC_MAIN 1
+          #define FF_PROFILE_HEVC_MAIN_10 2
+          #define FF_PROFILE_AAC_LOW 1
+          #endif
+          "@
+                  $newContent = $defines + "`r`n" + $content
+                  Set-Content -Path $u.FullName -Value $newContent
+              }
+          }
+
+      - name: Run build.py directly
+        shell: cmd
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+        run: |
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
+
+      - name: Upload Binaries
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenetdesk-windows-binaries
+          path: |
+            target/release/rustdesk.exe
+            target/release/*.dll
+            build/windows/x64/runner/Release/*
+          if-no-files-found: ignore
+
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            build-full.log
+            build-stdout.log
+            build-stderr.log
+            target/release/build/**/*.log
+          retention-days: 7
+          if-no-files-found: warn
+          compression-level: 6
