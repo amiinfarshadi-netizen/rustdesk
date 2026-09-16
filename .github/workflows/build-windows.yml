@@ -63,7 +63,7 @@ jobs:
           Pop-Location
 
           & "$vcpkgDir\vcpkg.exe" integrate install
-          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static aom:x64-windows-static --classic --recurse
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static aom:x64-windows-static libyuv:x64-windows-static --classic --recurse
 
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
           "$installedRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
@@ -89,6 +89,32 @@ jobs:
 
           $defines = "#ifndef FF_PROFILE_H264_BASELINE`n#define FF_PROFILE_H264_BASELINE 66`n#define FF_PROFILE_H264_MAIN 77`n#define FF_PROFILE_H264_HIGH 100`n#define FF_PROFILE_HEVC_MAIN 1`n#define FF_PROFILE_HEVC_MAIN_10 2`n#define FF_PROFILE_AAC_LOW 1`n#endif`n"
           $utilFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
+          foreach ($u in $utilFiles) {
+              $content = Get-Content $u.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                  Set-Content -Path $u.FullName -Value ($defines + $content)
+              }
+          }
+
+      - name: Run build.py directly
+        shell: cmd
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+          BINDGEN_EXTRA_CLANG_ARGS: "-IC:/vcpkg/installed/x64-windows-static/include"
+        run: |
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
+
+      - name: Upload Binaries
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenetdesk-windows-binaries
+          path: |
+            target/releaseFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
           foreach ($u in $utilFiles) {
               $content = Get-Content $u.FullName -Raw
               if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
