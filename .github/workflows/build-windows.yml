@@ -34,7 +34,7 @@ jobs:
           flutter-version: "3.24.5"
           channel: stable
 
-      - name: Setup vcpkg and FFmpeg Dependencies
+      - name: Setup vcpkg and Dependencies
         shell: pwsh
         run: |
           Remove-Item env:VCPKG_ROOT -ErrorAction SilentlyContinue
@@ -43,7 +43,7 @@ jobs:
           Write-Host "Using vcpkg from: $vcpkgDir"
 
           & "$vcpkgDir\vcpkg.exe" integrate install
-          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static libaom:x64-windows-static libyuv:x64-windows-static --classic --recurse
 
           $vcpkgInclude = "$vcpkgDir\installed\x64-windows-static\include"
           $vcpkgLib = "$vcpkgDir\installed\x64-windows-static\lib"
@@ -77,7 +77,7 @@ jobs:
             Write-Host "-> key_frame patched"
           }
 
-          # ---- Inject FF_PROFILE shim into util.cpp (no here-string, line array) ----
+          # ---- Inject FF_PROFILE shim into util.cpp ----
           $shimLines = @(
             '#ifndef FF_PROFILE_H264_BASELINE'
             '#define FF_PROFILE_H264_BASELINE 66'
