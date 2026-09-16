@@ -1,7 +1,7 @@
 name: BeeNet Windows Build
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch:
   push:
     branches:
       - master
@@ -55,7 +55,7 @@ jobs:
 
           & "$vcpkgDir\vcpkg.exe" integrate install
 
-          # Install stable deps (NO libaom/libyuv)
+          # نصب پکیج‌های پایدار FFmpeg (بدون libaom و libyuv)
           & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
 
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
@@ -116,9 +116,8 @@ jobs:
           path: |
             target/release/rustdesk.exe
             target/release/*.dll
-            build/windows Logs on Failure
-        if: failure()
-        uses:: ignore
+            build/windows/x64/runner/Release/*
+          if-no-files-found: ignore
 
       - name: Upload Logs on Failure
         if: failure()
