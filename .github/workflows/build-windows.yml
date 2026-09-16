@@ -57,8 +57,6 @@ jobs:
           Pop-Location
 
           & "$vcpkgDir\vcpkg.exe" integrate install
-
-          # نصب وابستگی‌های پایدار FFmpeg
           & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
 
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
@@ -112,28 +110,6 @@ jobs:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
           RUST_BACKTRACE: "full"
-        run: |
-          python -u build.py --flutter --hwcodec
-          echo EXITCODE=%ERRORLEVEL%
-          exit %ERRORLEVEL%
-
-      - name: Upload Binaries
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenetdesk-windows-binaries
-          path: |
-            target/release/rustdesk.exe
-            target/release/*.dll
-            build/windows/x64/runner/Release/*
-          if-no-files-found: ignore
-
-      - name: Upload Logs on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-failure-logs
-          TRACE: "full"
         run: |
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
