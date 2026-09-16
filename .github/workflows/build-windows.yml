@@ -19,6 +19,12 @@ jobs:
           submodules: recursive
           fetch-depth: 0
 
+      - name: Ensure Submodules are Initialized
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
+
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
@@ -65,12 +71,6 @@ jobs:
           "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Ensure Submodules are Synchronized
-        shell: pwsh
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive --force
 
       - name: Fetch Cargo Dependencies
         shell: cmd
