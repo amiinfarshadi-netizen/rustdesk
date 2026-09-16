@@ -7,38 +7,39 @@ on:
 jobs:
   build:
     runs-on: windows-2022
+
     steps:
-      # ۱. دریافت ریپوزیتوری و ساب‌ماژول‌ها
+      # 1) Checkout + submodules
       - name: Checkout Repository
         uses: actions/checkout@v4
         with:
           submodules: recursive
           fetch-depth: 0
 
-      # ۲. تنظیم محیط MSVC x64
+      # 2) MSVC x64 environment
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x64
 
-      # ۳. تنظیم پایتون
+      # 3) Python
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      # ۴. تنظیم ابزار Rust
+      # 4) Rust
       - name: Setup Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
-      # ۵. تنظیم Flutter
+      # 5) Flutter
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           flutter-version: "3.24.5"
           channel: stable
 
-      # ۶. نصب وابستگی‌های FFmpeg از طریق vcpkg و تنظیم PATH/INCLUDE/LIB
+      # 6) vcpkg + FFmpeg deps (classic mode)
       - name: Setup vcpkg and FFmpeg Dependencies
         shell: pwsh
         run: |
@@ -46,84 +47,97 @@ jobs:
 
           $vcpkgDir = "$env:VCPKG_INSTALLATION_ROOT"
           if (-not (Test-Path $vcpkgDir)) {
-              $vcpkgDir = "C:\vcpkg"
+            $vcpkgDir = "C:\vcpkg"
           }
           Write-Host "Using vcpkg from: $vcpkgDir"
-          
+
           & "$vcpkgDir\vcpkg.exe" integrate install
           & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
 
           $vcpkgInclude = "$vcpkgDir\installed\x64-windows-static\include"
-          $vcpkgLib = "$vcpkgDir\installed\x64-windows-static\lib"
+          $vcpkgLib     = "$vcpkgDir\installed\x64-windows-static\lib"
 
           Write-Host "Adding to INCLUDE: $vcpkgInclude"
-          Write-Host "Adding to LIB: $vcpkgLib"
-          
-          echo "VCPKG_ROOT=$vcpkgDir" >> $env:GITHUB_ENV
-          echo "INCLUDE=$vcpkgInclude;$env:INCLUDE" >> $env:GITHUB_ENV
-          echo "LIB=$vcpkgLib;$env:LIB" >> $env:GITHUB_ENV
-          echo "FFMPEG_DIR=$vcpkgDir\installed\x64-windows-static" >> $env:GITHUB_ENV
+          Write-Host "Adding to LIB:     $vcpkgLib"
 
-      # ۷. دریافت سورس وابستگی‌ها
+          "VCPKG_ROOT=$vcpkgDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "INCLUDE=$vcpkgInclude;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "LIB=$vcpkgLib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "FFMPEG_DIR=$vcpkgDir\installed\x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      # 7) Cargo fetch (stabilizes network & speeds build)
       - name: Fetch Cargo Dependencies
         shell: pwsh
         run: |
           cargo fetch
 
-      # ۸. پچ جامع hwcodec برای سازگاری کامل با نسخه‌های جدید FFmpeg
+      # 8) Patch hwcodec for newer FFmpeg
       - name: Patch hwcodec for newer FFmpeg
         shell: pwsh
         run: |
-          $ErrorActionPreference = "Continue"
-          $checkouts = "$env:USERPROFILE\.cargo\git\checkouts"
+          $ErrorActionPreference = "Stop"
+
+          $checkouts = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
           if (-not (Test-Path $checkouts)) {
-              Write-Host "Cargo checkouts directory not found: $checkouts"
-              exit 1
+            Write-Host "Cargo checkouts directory not found: $checkouts"
+            exit 1
           }
 
-          # پچ key_frame
-          $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
+          # ---- Patch key_frame (AVFrame.key_frame removed; use flags) ----
+          $ramFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "ffmpeg_ram_decode.cpp" |
+            Where-Object { $_.FullName -like "*hwcodec*" }
+
           foreach ($f in $ramFiles) {
-              Write-Host "Patching key_frame in: $($f.FullName)"
-              $rawContent = Get-Content $f.FullName -Raw
-              $patchedContent = $rawContent -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
-              Set-Content -Path $f.FullName -Value $patchedContent -NoNewline
-              Write-Host "-> Successfully patched key_frame"
+            Write-Host "Patching key_frame in: $($f.FullName)"
+            $raw = Get-Content $f.FullName -Raw
+            $patched = $raw -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+            Set-Content -Path $f.FullName -Value $patched -NoNewline
+            Write-Host "-> Successfully patched key_frame"
           }
 
-          # تزریق شیم کامل ثوابت به util.cpp
-          $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" | Where-Object { $_.FullName -like "*hwcodec*" }
+          # ---- Inject FF_PROFILE shim into util.cpp (FIXED GUARD) ----
+          $utilFiles = Get-ChildItem -Path $checkouts -Recurse -Filter "util.cpp" |
+            Where-Object { $_.FullName -like "*hwcodec*" }
+
           foreach ($f in $utilFiles) {
-              Write-Host "Patching FF_PROFILE in: $($f.FullName)"
-              $content = Get-Content $f.FullName -Raw
-              if ($content -notmatch "FF_PROFILE_H264_HIGH") {
-                  $shim = @"
-          #ifndef FF_PROFILE_H264_BASELINE
-          #define FF_PROFILE_H264_BASELINE 66
-          #endif
-          #ifndef FF_PROFILE_H264_MAIN
-          #define FF_PROFILE_H264_MAIN 77
-          #endif
-          #ifndef FF_PROFILE_H264_HIGH
-          #define FF_PROFILE_H264_HIGH 100
-          #endif
-          #ifndef FF_PROFILE_HEVC_MAIN
-          #define FF_PROFILE_HEVC_MAIN 1
-          #endif
-          #ifndef FF_PROFILE_HEVC_MAIN_10
-          #define FF_PROFILE_HEVC_MAIN_10 2
-          #endif
-          #ifndef FF_PROFILE_AAC_LOW
-          #define FF_PROFILE_AAC_LOW 1
-          #endif
-          "@
-                  $content = $shim + "`n" + $content
-                  Set-Content -Path $f.FullName -Value $content -NoNewline
-                  Write-Host "-> Injected complete FF_PROFILE shim"
-              }
+            Write-Host "Checking util.cpp in: $($f.FullName)"
+            $content = Get-Content $f.FullName -Raw
+
+            # IMPORTANT: don't check for usage string (it exists in code).
+            # Check for an actual macro definition instead.
+            if ($content -notmatch '#\s*define\s+FF_PROFILE_H264_HIGH\b') {
+              $shim = @"
+#ifndef FF_PROFILE_H264_BASELINE
+#define FF_PROFILE_H264_BASELINE 66
+#endif
+#ifndef FF_PROFILE_H264_MAIN
+#define FF_PROFILE_H264_MAIN 77
+#endif
+#ifndef FF_PROFILE_H264_HIGH
+#define FF_PROFILE_H264_HIGH 100
+#endif
+
+#ifndef FF_PROFILE_HEVC_MAIN
+#define FF_PROFILE_HEVC_MAIN 1
+#endif
+#ifndef FF_PROFILE_HEVC_MAIN_10
+#define FF_PROFILE_HEVC_MAIN_10 2
+#endif
+
+#ifndef FF_PROFILE_AAC_LOW
+#define FF_PROFILE_AAC_LOW 1
+#endif
+
+"@
+              $newContent = $shim + $content
+              Set-Content -Path $f.FullName -Value $newContent -NoNewline
+              Write-Host "-> Successfully injected full FF_PROFILE shim into util.cpp"
+            } else {
+              Write-Host "-> FF_PROFILE shim already present (skipping)"
+            }
           }
 
-      # ۹. اجرای مستقیم اسکریپت بیلد
+      # 9) Build
       - name: Run build.py directly
         shell: cmd
         env:
@@ -135,7 +149,7 @@ jobs:
           echo EXITCODE=%ERRORLEVEL%
           exit %ERRORLEVEL%
 
-      # ۱۰. آپلود خروجی‌ها (فایل‌های exe و dll)
+      # 10) Upload binaries if success
       - name: Upload Artifacts
         if: success()
         uses: actions/upload-artifact@v4
@@ -147,7 +161,7 @@ jobs:
             build/windows/runner/Release/*
           if-no-files-found: ignore
 
-      # ۱۱. ذخیره لاگ‌ها در صورت بروز خطا
+      # 11) Always upload logs (helps debugging)
       - name: Upload Logs on Failure
         if: always()
         uses: actions/upload-artifact@v4
