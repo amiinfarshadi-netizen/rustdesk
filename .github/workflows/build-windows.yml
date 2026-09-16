@@ -63,7 +63,8 @@ jobs:
           Pop-Location
 
           & "$vcpkgDir\vcpkg.exe" integrate install
-          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static aom:x64-windows-static libyuv:x64-windows-static --classic --recurse
+          # intel-mediasdk برای رفع خطای لینک libmfx اضافه شد
+          & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static aom:x64-windows-static libyuv:x64-windows-static intel-mediasdk:x64-windows-static --classic --recurse
 
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
           "$installedRoot\bin" | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
@@ -72,6 +73,19 @@ jobs:
           "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "CPATH=$installedRoot\include" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Ensure libmfx Library Name Aliases
+        shell: pwsh
+        run: |
+          # بیمه لینکر: تضمین شناسایی کتابخانه تحت هر دو نام mfx و libmfx
+          $libDir = "C:\vcpkg\installed\x64-windows-static\lib"
+          if (Test-Path "$libDir\libmfx.lib") {
+              Copy-Item "$libDir\libmfx.lib" "$libDir\mfx.lib" -Force -ErrorAction SilentlyContinue
+          }
+          if (Test-Path "$libDir\mfx.lib") {
+              Copy-Item "$libDir\mfx.lib" "$libDir\libmfx.lib" -Force -ErrorAction SilentlyContinue
+          }
+          Get-ChildItem $libDir -Filter "*mfx*" | ForEach-Object { Write-Host "Found: $($_.Name)" }
 
       - name: Fetch Cargo Dependencies
         shell: cmd
