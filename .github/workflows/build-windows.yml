@@ -15,6 +15,9 @@ jobs:
     steps:
       - name: Checkout Repository
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
       - name: Setup MSVC Developer Environment
         uses: ilammy/msvc-dev-cmd@v1
@@ -55,7 +58,7 @@ jobs:
 
           & "$vcpkgDir\vcpkg.exe" integrate install
 
-          # نصب وابستگی‌های پایدار FFmpeg (بدون پورت‌های نامعتبر libaom و libyuv)
+          # نصب وابستگی‌های پایدار FFmpeg
           & "$vcpkgDir\vcpkg.exe" install ffmpeg[gpl,vpx,x264,opus]:x64-windows-static libvpx:x64-windows-static opus:x64-windows-static --classic --recurse
 
           $installedRoot = "$vcpkgDir\installed\x64-windows-static"
@@ -64,6 +67,12 @@ jobs:
           "FFMPEG_DIR=$installedRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "INCLUDE=$installedRoot\include;$env:INCLUDE" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
           "LIB=$installedRoot\lib;$env:LIB" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Ensure Submodules are Synchronized
+        shell: pwsh
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
 
       - name: Fetch Cargo Dependencies
         shell: cmd
@@ -74,4 +83,83 @@ jobs:
         run: |
           $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
 
-          $hwcodecFiles = Get-ChildItem -Path "$cargo
+          $hwcodecFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "ffmpeg_ram_decode.cpp" -ErrorAction SilentlyContinue
+          foreach ($f in $hwcodecFiles) {
+              (Get-Content $f.FullName) -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)' | Set-Content $f.FullName
+          }
+
+          $utilFiles = Get-ChildItem -Path "$cargoHome\git\checkouts" -Recurse -Filter "util.cpp" -ErrorAction SilentlyContinue
+          foreach ($u in $utilFiles) {
+              $content = Get-Content $u.FullName -Raw
+              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                  $defines = @"
+#ifndef FF_PROFILE_H264_BASELINE
+#define FF_PROFILE_H264_BASELINE 66
+#define FF_PROFILE_H264_MAIN 77
+#define FF_PROFILE_H264_HIGH 100
+#define FF_PROFILE_HEVC_MAIN 1
+#define FF_PROFILE_HEVC_MAIN_10 2
+#define FF_PROFILE_AAC_LOW 1
+#endif
+"@
+                  Set-Content -Path $u.FullName -Value ($defines + "`r`n" + $content)
+              }
+          }
+
+      - name: Run build.py directly
+        shell: cmd
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+        run: |
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
+
+      - name: Upload Binaries
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenetdesk-windows-binaries
+          path: |
+            target/release/rustdesk.exe
+            target/release/*.dll
+            build/windows/x64/runner/Release/*
+          if-no-files-found: ignore
+
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          TRACE: "full"
+        run: |
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
+
+      - name: Upload Binaries
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenetdesk-windows-binaries
+          path: |
+            target/release/rustdesk.exe
+            target/release/*.dll
+            build/windows/x64/runner/Release/*
+          if-no-files-found: ignore
+
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-failure-logs
+          path: |
+            build-full.log
+            build-stdout.log
+            build-stderr.log
+            target/release/build/**/*.log
+          retention-days: 7
+          if-no-files-found: warn
+          compression-level: 6
