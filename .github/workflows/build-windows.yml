@@ -1,77 +1,110 @@
-name: Build Windows Client
+name: BeeNet Windows Build
 
 on:
   push:
-    branches: [ master ]
+    branches: [ master, main ]
   pull_request:
-    branches: [ master ]
+    branches: [ master, main ]
   workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-latest
-    env:
-      RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
-    
+    runs-on: windows-2022
+
     steps:
-    - name: Checkout Source Code
-      uses: actions/checkout@v4
-      with:
-        submodules: recursive
-        fetch-depth: 0
+      - name: Checkout Source Code
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
 
-    - name: Setup MSVC Developer Command Prompt
-      uses: ilammy/msvc-dev-cmd@v1
+      - name: Ensure Submodules are Initialized
+        shell: bash
+        run: git submodule update --init --recursive
 
-    - name: Setup Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: '3.10'
+      - name: Setup MSVC Developer Command Prompt
+        uses: ilammy/msvc-dev-cmd@v1
 
-    - name: Setup Rust Toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        toolchain: stable
-        targets: x86_64-pc-windows-msvc
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-    - name: Setup Flutter
-      uses: subosito/flutter-action@v2
-      with:
-        flutter-version: '3.19.0'
-        channel: 'stable'
+      - name: Setup Rust Toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
 
-    - name: Restore vcpkg Cache
-      id: vcpkg-cache
-      uses: actions/cache@v4
-      with:
-        path: C:\vcpkg\installed
-        key: beenetdesk-vcpkg-${{ runner.os }}-x64-static-v1
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: "3.24.5"
+          channel: stable
 
-    - name: Setup vcpkg and Dependencies
-      shell: bash
-      run: |
-        vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static
+      - name: Restore vcpkg Cache
+        id: vcpkg-cache
+        uses: actions/cache@v4
+        with:
+          path: C:\vcpkg\installed
+          key: beenetdesk-vcpkg-${{ runner.os }}-x64-static-v2
+          restore-keys: |
+            beenetdesk-vcpkg-${{ runner.os }}-x64-static-
 
-    - name: Provide libmfx Stub/Static Lib for hwcodec
-      shell: bash
-      run: |
-        # ایجاد فایل‌های استاب برای جلوگیری از خطای لینک در hwcodec
-        mkdir -p libs/hwcodec/lib
-        echo "stub" > libs/hwcodec/lib/libmfx.lib
+      - name: Setup vcpkg and Dependencies
+        shell: pwsh
+        run: |
+          $env:VCPKG_ROOT = "C:\vcpkg"
+          [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\vcpkg', [System.EnvironmentVariableTarget]::Process)
+          [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\vcpkg', [System.EnvironmentVariableTarget]::Machine)
+          
+          # استفاده صریح از --classic برای جلوگیری از خطای Manifest Mode
+          C:\vcpkg\vcpkg.exe install --classic `
+            libvpx:x64-windows-static `
+            libyuv:x64-windows-static `
+            opus:x64-windows-static
 
-    - name: Cargo Fetch & Patch hwcodec for newer FFmpeg
-      shell: bash
-      run: |
-        cargo fetch
-        # در صورت نیاز به پچ خاص برای ffmpeg یا وابستگی‌ها در اینجا اضافه کنید
+      - name: Install LLVM (Clang for bindgen)
+        run: choco install llvm -y
 
-    - name: Run Build Script
-      shell: bash
-      run: |
-        python3 build.py --release
+      - name: Install Flutter Rust Bridge Codegen
+        shell: bash
+        run: cargo install flutter_rust_bridge_codegen --version 1.80.1
 
-    - name: Upload Binaries
-      uses: actions/upload-artifact@v4
-      with:
-        name: beenet-windows-binaries
-        path: target/release/*.exe
+      - name: Provide libmfx Stub for hwcodec
+        shell: bash
+        run: |
+          mkdir -p libs/hwcodec/lib
+          echo "stub" > libs/hwcodec/lib/libmfx.lib
+
+      - name: Run Build Script
+        shell: cmd
+        env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
+          RS_PUB_KEY: "urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw="
+          RUST_BACKTRACE: "full"
+          VCPKG_ROOT: "C:\\vcpkg"
+        run: |
+          python -u build.py --flutter --hwcodec
+
+      - name: Upload Binaries
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-windows-binaries
+          path: |
+            target/release/*.dll
+            target/release/*.exe
+            build/windows/runner/Release/*
+          if-no-files-found: warn
+
+      - name: Upload Logs on Failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: beenet-build-logs
+          path: |
+            build-full.log
+            build-stdout.log
+            build-stderr.log
+            target/release/build.log
+          if-no-files-found: ignore
