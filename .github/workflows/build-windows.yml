@@ -1,99 +1,77 @@
-name: BeeNet Windows Build
+name: Build Windows Client
 
 on:
-  workflow_dispatch:
   push:
+    branches: [ master ]
+  pull_request:
+    branches: [ master ]
+  workflow_dispatch:
 
 jobs:
   build:
-    runs-on: windows-2022
+    runs-on: windows-latest
+    env:
+      RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+    
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
+    - name: Checkout Source Code
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+        fetch-depth: 0
 
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
+    - name: Setup MSVC Developer Command Prompt
+      uses: ilammy/msvc-dev-cmd@v1
 
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
 
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: "3.24.5"
-          channel: stable
+    - name: Setup Rust Toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        toolchain: stable
+        targets: x86_64-pc-windows-msvc
 
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+    - name: Setup Flutter
+      uses: subosito/flutter-action@v2
+      with:
+        flutter-version: '3.19.0'
+        channel: 'stable'
 
-      - name: Setup LLVM/Clang (for bindgen)
-        run: |
-          choco install llvm -y --no-progress
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
-        shell: pwsh
+    - name: Restore vcpkg Cache
+      id: vcpkg-cache
+      uses: actions/cache@v4
+      with:
+        path: C:\vcpkg\installed
+        key: beenetdesk-vcpkg-${{ runner.os }}-x64-static-v1
 
-      - name: Setup vcpkg and Build Dependencies
-        shell: pwsh
-        run: |
-          cd C:\vcpkg
-          git pull
-          .\bootstrap-vcpkg.bat
-          .\vcpkg.exe integrate install
-          .\vcpkg.exe install --triplet x64-windows-static ffmpeg[gpl,vpx,x264,opus] libvpx opus aom libyuv
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+    - name: Setup vcpkg and Dependencies
+      shell: bash
+      run: |
+        vcpkg install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static
 
-      - name: Provide libmfx Stub for hwcodec
-        shell: pwsh
-        run: |
-          $libDir = "C:\vcpkg\installed\x64-windows-static\lib"
-          if (-not (Test-Path $libDir)) { New-Item -ItemType Directory -Path $libDir -Force }
-          $mfxFile = Join-Path $libDir "libmfx.lib"
-          if (-not (Test-Path $mfxFile)) {
-              Write-Host "Creating stub libmfx.lib for linker..."
-              $dummyDef = "LIBRARY libmfx`nEXPORTS`n  MFXInit`n  MFXClose"
-              Set-Content -Path "mfx.def" -Value $dummyDef
-              lib.exe /def:mfx.def /machine:x64 /out:"$mfxFile"
-              Copy-Item "$mfxFile" (Join-Path $libDir "mfx.lib") -Force
-          }
+    - name: Provide libmfx Stub/Static Lib for hwcodec
+      shell: bash
+      run: |
+        # ایجاد فایل‌های استاب برای جلوگیری از خطای لینک در hwcodec
+        mkdir -p libs/hwcodec/lib
+        echo "stub" > libs/hwcodec/lib/libmfx.lib
 
-      - name: Run Flutter Rust Bridge Codegen
-        shell: pwsh
-        run: |
-          cd flutter
-          flutter pub get
-          cd ..
-          cargo install flutter_rust_bridge_codegen --version 1.80.1
-          flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
+    - name: Cargo Fetch & Patch hwcodec for newer FFmpeg
+      shell: bash
+      run: |
+        cargo fetch
+        # در صورت نیاز به پچ خاص برای ffmpeg یا وابستگی‌ها در اینجا اضافه کنید
 
-      - name: Fetch Dependencies & Apply hwcodec Patches
-        shell: pwsh
-        run: |
-          cargo fetch
-          # اعمال پچ در صورت وجود عدم سازگاری در سورس‌های محلی hwcodec با FFmpeg جدید
-          # (در صورت نیاز اسکریپت جایگزینی FF_PROFILE_H264_BASELINE در اینجا قرار می‌گیرد)
+    - name: Run Build Script
+      shell: bash
+      run: |
+        python3 build.py --release
 
-      - name: Execute Main Build Script
-        shell: cmd
-        env:
-          RENDEZVOUS_SERVER: "5.202.90.37"
-          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
-          VCPKG_ROOT: "C:\\vcpkg"
-          RUST_BACKTRACE: "full"
-        run: |
-          python -u build.py --flutter --hwcodec
-
-      - name: Upload Build Artifacts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenet-windows-binaries
-          path: |
-            target/release/*.dll
-            target/release/*.exe
-            flutter/build/windows/runner/Release/**
-            build-*.log
-          if-no-files-found: ignore
+    - name: Upload Binaries
+      uses: actions/upload-artifact@v4
+      with:
+        name: beenet-windows-binaries
+        path: target/release/*.exe
