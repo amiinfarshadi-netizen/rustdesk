@@ -57,24 +57,41 @@ jobs:
           [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\vcpkg', [System.EnvironmentVariableTarget]::Process)
           [System.Environment]::SetEnvironmentVariable('VCPKG_ROOT', 'C:\vcpkg', [System.EnvironmentVariableTarget]::Machine)
           
-          # استفاده صریح از --classic برای جلوگیری از خطای Manifest Mode
           C:\vcpkg\vcpkg.exe install --classic `
             libvpx:x64-windows-static `
             libyuv:x64-windows-static `
             opus:x64-windows-static
 
       - name: Install LLVM (Clang for bindgen)
-        run: choco install llvm -y
+        run: |
+          choco install llvm -y
+          echo "C:\Program Files\LLVM\bin" >> $GITHUB_PATH
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $GITHUB_ENV
 
       - name: Install Flutter Rust Bridge Codegen
         shell: bash
         run: cargo install flutter_rust_bridge_codegen --version 1.80.1
+
+      - name: Flutter Pub Get (Pre-requisite for Codegen)
+        working-directory: flutter
+        shell: bash
+        run: flutter pub get
 
       - name: Provide libmfx Stub for hwcodec
         shell: bash
         run: |
           mkdir -p libs/hwcodec/lib
           echo "stub" > libs/hwcodec/lib/libmfx.lib
+
+      - name: Flutter Rust Bridge Codegen
+        shell: bash
+        env:
+          LIBCLANG_PATH: 'C:\Program Files\LLVM\bin'
+        run: |
+          flutter_rust_bridge_codegen \
+            --rust-input src/flutter_ffi.rs \
+            --rust-output src/bridge_generated.rs \
+            --dart-output flutter/lib/generated_bridge.dart
 
       - name: Run Build Script
         shell: cmd
