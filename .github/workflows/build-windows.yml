@@ -12,8 +12,17 @@ jobs:
     runs-on: windows-2022
 
     steps:
-      - name: Checkout Code
+      - name: Checkout Code with Submodules
         uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+
+      - name: Ensure Submodules are Initialized
+        shell: bash
+        run: |
+          git submodule sync --recursive
+          git submodule update --init --recursive --force
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -49,7 +58,6 @@ jobs:
           git pull
           .\bootstrap-vcpkg.bat
           .\vcpkg.exe integrate install
-          # نصب وابستگی‌های استاندارد و مورد نیاز بدون پورت‌های منسوخ اینتل
           .\vcpkg.exe install --triplet x64-windows-static ffmpeg[gpl,vpx,x264,opus] libvpx opus aom libyuv
 
       - name: Provide libmfx Stub/Static Lib for hwcodec
@@ -59,11 +67,9 @@ jobs:
           if (-not (Test-Path $libDir)) {
               New-Item -ItemType Directory -Path $libDir -Force
           }
-          # اگر libmfx وجود ندارد، جهت جلوگیری از توقف لینکر یک فایل استاتیک یا آلیاس ایجاد می‌شود
           $mfxFile = Join-Path $libDir "libmfx.lib"
           if (-not (Test-Path $mfxFile)) {
-              Write-Host "Creating stub/alias libmfx.lib for linker..."
-              # ایجاد یک استاب لایبرری استاندارد با lib.exe از MSVC
+              Write-Host "Creating stub libmfx.lib for linker..."
               $dummyDef = "LIBRARY libmfx`nEXPORTS`n  MFXInit`n  MFXClose"
               Set-Content -Path "mfx.def" -Value $dummyDef
               lib.exe /def:mfx.def /machine:x64 /out:"$mfxFile"
@@ -77,11 +83,12 @@ jobs:
           $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
           Write-Host "Searching hwcodec files in: $checkoutRoot"
 
-          Get-ChildItem -Path $checkoutRoot -Filter "util.cpp" -Recurse | ForEach-Object {
-              Write-Host "Patching util.cpp: $($_.FullName)"
-              $content = Get-Content $_.FullName -Raw
-              if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
-                  $shim = @"
+          if (Test-Path $checkoutRoot) {
+              Get-ChildItem -Path $checkoutRoot -Filter "util.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                  Write-Host "Patching util.cpp: $($_.FullName)"
+                  $content = Get-Content $_.FullName -Raw
+                  if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                      $shim = @"
           #ifndef FF_PROFILE_H264_BASELINE
           #define FF_PROFILE_H264_BASELINE 66
           #define FF_PROFILE_H264_MAIN 77
@@ -91,16 +98,19 @@ jobs:
           #define FF_PROFILE_AAC_LOW 1
           #endif
           "@
-                  $content = $shim + "`n" + $content
+                      $content = $shim + "`n" + $content
+                      Set-Content -Path $_.FullName -Value $content -NoNewline
+                  }
+              }
+
+              Get-ChildItem -Path $checkoutRoot -Filter "ffmpeg_ram_decode.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                  Write-Host "Patching ffmpeg_ram_decode.cpp: $($_.FullName)"
+                  $content = Get-Content $_.FullName -Raw
+                  $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
                   Set-Content -Path $_.FullName -Value $content -NoNewline
               }
-          }
-
-          Get-ChildItem -Path $checkoutRoot -Filter "ffmpeg_ram_decode.cpp" -Recurse | ForEach-Object {
-              Write-Host "Patching ffmpeg_ram_decode.cpp: $($_.FullName)"
-              $content = Get-Content $_.FullName -Raw
-              $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
-              Set-Content -Path $_.FullName -Value $content -NoNewline
+          } else {
+              Write-Warning "No git checkouts directory found in cargo cache."
           }
 
       - name: Run Build Script
