@@ -1,147 +1,42 @@
-name: BeeNet Windows Build
+    - name: Generate Flutter Rust Bridge code
+      shell: bash
+      run: |
+        cargo install flutter_rust_bridge_codegen --version 1.80.1
+        flutter_rust_bridge_codegen --rust-input src/flutter_ffi.rs --dart-output flutter/lib/generated_bridge.dart
 
-on:
-  workflow_dispatch:
-  push:
-    branches:
-      - master
-      - main
+    - name: Cargo Fetch & Patch hwcodec for newer FFmpeg
+      shell: pwsh
+      run: |
+        cargo fetch
+        $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
+        Write-Host "Searching hwcodec files in: $checkoutRoot"
 
-jobs:
-  build:
-    runs-on: windows-2022
+        if (Test-Path $checkoutRoot) {
+            Get-ChildItem -Path $checkoutRoot -Filter "util.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "Patching util.cpp: $($_.FullName)"
+                $content = Get-Content $_.FullName -Raw
+                if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
+                    $shim = @"
+        #ifndef FF_PROFILE_H264_BASELINE
+        #define FF_PROFILE_H264_BASELINE 66
+        #define FF_PROFILE_H264_MAIN 77
+        #define FF_PROFILE_H264_HIGH 100
+        #define FF_PROFILE_HEVC_MAIN 1
+        #define FF_PROFILE_HEVC_MAIN_10 2
+        #define FF_PROFILE_AAC_LOW 1
+        #endif
+        "@
+                    $content = $shim + "`n" + $content
+                    Set-Content -Path $_.FullName -Value $content -NoNewline
+                }
+            }
 
-    steps:
-      - name: Checkout Code with Submodules
-        uses: actions/checkout@v4
-        with:
-          submodules: recursive
-          fetch-depth: 0
-
-      - name: Ensure Submodules are Initialized
-        shell: bash
-        run: |
-          git submodule sync --recursive
-          git submodule update --init --recursive --force
-
-      - name: Setup Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-
-      - name: Setup Rust Toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Setup Flutter
-        uses: subosito/flutter-action@v2
-        with:
-          flutter-version: '3.24.5'
-          channel: 'stable'
-
-      - name: Setup MSVC Developer Command Prompt
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
-
-      - name: Restore vcpkg Cache
-        uses: actions/cache@v4
-        id: vcpkg-cache
-        with:
-          path: |
-            C:/vcpkg/installed
-            C:/vcpkg/packages
-          key: ${{ runner.os }}-vcpkg-${{ hashFiles('**/vcpkg.json') }}-v1
-
-      - name: Setup vcpkg and Dependencies
-        run: |
-          cd C:\vcpkg
-          git pull
-          .\bootstrap-vcpkg.bat
-          .\vcpkg.exe integrate install
-          .\vcpkg.exe install --triplet x64-windows-static ffmpeg[gpl,vpx,x264,opus] libvpx opus aom libyuv
-
-      - name: Provide libmfx Stub/Static Lib for hwcodec
-        shell: pwsh
-        run: |
-          $libDir = "C:\vcpkg\installed\x64-windows-static\lib"
-          if (-not (Test-Path $libDir)) {
-              New-Item -ItemType Directory -Path $libDir -Force
-          }
-          $mfxFile = Join-Path $libDir "libmfx.lib"
-          if (-not (Test-Path $mfxFile)) {
-              Write-Host "Creating stub libmfx.lib for linker..."
-              $dummyDef = "LIBRARY libmfx`nEXPORTS`n  MFXInit`n  MFXClose"
-              Set-Content -Path "mfx.def" -Value $dummyDef
-              lib.exe /def:mfx.def /machine:x64 /out:"$mfxFile"
-              Copy-Item "$mfxFile" (Join-Path $libDir "mfx.lib") -Force
-          }
-
-      - name: Cargo Fetch & Patch hwcodec for newer FFmpeg
-        shell: pwsh
-        run: |
-          cargo fetch
-          $checkoutRoot = Join-Path $env:USERPROFILE ".cargo\git\checkouts"
-          Write-Host "Searching hwcodec files in: $checkoutRoot"
-
-          if (Test-Path $checkoutRoot) {
-              Get-ChildItem -Path $checkoutRoot -Filter "util.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                  Write-Host "Patching util.cpp: $($_.FullName)"
-                  $content = Get-Content $_.FullName -Raw
-                  if ($content -notmatch "FF_PROFILE_H264_BASELINE") {
-                      $shim = @"
-          #ifndef FF_PROFILE_H264_BASELINE
-          #define FF_PROFILE_H264_BASELINE 66
-          #define FF_PROFILE_H264_MAIN 77
-          #define FF_PROFILE_H264_HIGH 100
-          #define FF_PROFILE_HEVC_MAIN 1
-          #define FF_PROFILE_HEVC_MAIN_10 2
-          #define FF_PROFILE_AAC_LOW 1
-          #endif
-          "@
-                      $content = $shim + "`n" + $content
-                      Set-Content -Path $_.FullName -Value $content -NoNewline
-                  }
-              }
-
-              Get-ChildItem -Path $checkoutRoot -Filter "ffmpeg_ram_decode.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
-                  Write-Host "Patching ffmpeg_ram_decode.cpp: $($_.FullName)"
-                  $content = Get-Content $_.FullName -Raw
-                  $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
-                  Set-Content -Path $_.FullName -Value $content -NoNewline
-              }
-          }
-
-      - name: Run Build Script
-        shell: cmd
-        env:
-          RENDEZVOUS_SERVER: 5.202.90.37
-          RS_PUB_KEY: urwMFu4fL6ov3jSaG+KZoduD6OdSp3sstm6iwiaWDGw=
-          RUST_BACKTRACE: full
-          VCPKG_ROOT: C:\vcpkg
-          FFMPEG_DIR: C:\vcpkg\installed\x64-windows-static
-        run: |
-          set "LIB=C:\vcpkg\installed\x64-windows-static\lib;%LIB%"
-          set "INCLUDE=C:\vcpkg\installed\x64-windows-static\include;%INCLUDE%"
-          python -u build.py --flutter --hwcodec
-          if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
-
-      - name: Upload Artifacts on Success
-        if: success()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenet-windows-binaries
-          path: |
-            build/windows/x64/runner/Release/*
-            target/release/*.exe
-            target/release/*.dll
-
-      - name: Upload Logs on Failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: beenet-build-failure-logs
-          path: |
-            build-full.log
-            build-stdout.log
-            build-stderr.log
-            target/release/build/**/*.log
+            Get-ChildItem -Path $checkoutRoot -Filter "ffmpeg_ram_decode.cpp" -Recurse -ErrorAction SilentlyContinue | ForEach-Object {
+                Write-Host "Patching ffmpeg_ram_decode.cpp: $($_.FullName)"
+                $content = Get-Content $_.FullName -Raw
+                $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+                Set-Content -Path $_.FullName -Value $content -NoNewline
+            }
+        } else {
+            Write-Warning "No git checkouts directory found in cargo cache."
+        }
