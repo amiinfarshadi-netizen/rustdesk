@@ -109,8 +109,6 @@ jobs:
                   $content = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
                   Set-Content -Path $_.FullName -Value $content -NoNewline
               }
-          } else {
-              Write-Warning "No git checkouts directory found in cargo cache."
           }
 
       - name: Run Build Script
@@ -121,9 +119,9 @@ jobs:
           RUST_BACKTRACE: full
           VCPKG_ROOT: C:\vcpkg
           FFMPEG_DIR: C:\vcpkg\installed\x64-windows-static
-          INCLUDE: C:\vcpkg\installed\x64-windows-static\include;%INCLUDE%
-          LIB: C:\vcpkg\installed\x64-windows-static\lib;%LIB%
         run: |
+          set "LIB=C:\vcpkg\installed\x64-windows-static\lib;%LIB%"
+          set "INCLUDE=C:\vcpkg\installed\x64-windows-static\include;%INCLUDE%"
           python -u build.py --flutter --hwcodec
           if %ERRORLEVEL% NEQ 0 exit /b %ERRORLEVEL%
 
