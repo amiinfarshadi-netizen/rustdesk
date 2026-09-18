@@ -84,7 +84,6 @@ jobs:
           lib /OUT:libmfx.lib mfx_stub.obj
           copy /Y libmfx.lib target\debug\libmfx.lib
           copy /Y libmfx.lib target\release\libmfx.lib
-          copy /Y libmfx.lib libmfx.lib
 
       - name: Prepare Flutter Packages
         shell: bash
