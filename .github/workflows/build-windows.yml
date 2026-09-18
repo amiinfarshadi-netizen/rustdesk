@@ -61,26 +61,23 @@ jobs:
         shell: bash
         run: |
           vcpkg integrate install
-          # اگر مانیفست وجود دارد، وابستگی‌های آن نصب می‌شود و پکیج‌های عمومی به شکل کلاسیک نصب می‌شوند
           if [ -f "vcpkg.json" ]; then
             vcpkg install --triplet x64-windows
           fi
-          # نصب مستقیم در حالت classic خارج از دایرکتوری دارای vcpkg.json
           (cd "$VCPKG_INSTALLATION_ROOT" && ./vcpkg.exe install libvpx:x64-windows libyuv:x64-windows opus:x64-windows)
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
 
       - name: Provide libmfx Stub for hwcodec
-        shell: bash
+        shell: cmd
         run: |
-          mkdir -p target/debug target/release
-          cat << 'EOF' > mfx_stub.c
-          void MFXInit() {}
-          void MFXClose() {}
-          EOF
+          if not exist target\debug mkdir target\debug
+          if not exist target\release mkdir target\release
+          echo void MFXInit() {} > mfx_stub.c
+          echo void MFXClose() {} >> mfx_stub.c
           cl /c mfx_stub.c /Fo:mfx_stub.obj
           lib /OUT:libmfx.lib mfx_stub.obj
-          cp libmfx.lib target/debug/
-          cp libmfx.lib target/release/
+          copy /Y libmfx.lib target\debug\libmfx.lib
+          copy /Y libmfx.lib target\release\libmfx.lib
 
       - name: Prepare Flutter Packages
         shell: bash
