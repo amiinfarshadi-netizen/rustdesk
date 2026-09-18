@@ -1,11 +1,10 @@
 [package]
 name = "beenetdesk"
 version = "1.5.0"
-authors = ["rustdesk <info@rustdesk.com>"]
+authors = ["beenet <info@beenet.com>"]
 edition = "2021"
-build= "build.rs"
-description = "RustDesk Remote Desktop"
-# default-run = "rustdesk"
+build = "build.rs"
+description = "BeeNetDesk Remote Desktop"
 
 rust-version = "1.75"
 
@@ -14,8 +13,8 @@ name = "librustdesk"
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [[bin]]
-name = "naming"
-path = "src/naming.rs"
+name = "beenetdesk"
+path = "src/main.rs"
 
 [[bin]]
 name = "service"
@@ -32,11 +31,6 @@ hwcodec = ["scrap/hwcodec"]
 vram = ["scrap/vram"]
 mediacodec = ["scrap/mediacodec"]
 drm = ["scrap/drm"]
-# The display wake, as its OWN compile gate on top of `drm`. Everything else in the drm backend
-# READS (it captures a scanout); the wake WRITES, injecting one synthetic pointer event from the
-# root service so a compositor that idle-disabled its outputs re-enables them. That is a different
-# kind of operation and deserves a switch that can remove it from the binary entirely, without
-# giving up DRM capture: `--features drm` builds the capture path with no wake code compiled in.
 drm-wake = ["drm"]
 linux-pkg-config = ["magnum-opus/linux-pkg-config", "scrap/linux-pkg-config"]
 unix-file-copy-paste = [
@@ -47,8 +41,6 @@ unix-file-copy-paste = [
     "clipboard/unix-file-copy-paste",
 ]
 screencapturekit = ["cpal/screencapturekit"]
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 async-trait = "0.1"
@@ -90,7 +82,6 @@ kcp-sys= { git = "https://github.com/rustdesk-org/kcp-sys", branch = "rustdesk-p
 reqwest = { version = "0.12", features = ["blocking", "socks", "json", "native-tls", "rustls-tls", "rustls-tls-native-roots", "gzip", "zstd"], default-features=false }
 
 [target.'cfg(not(target_os = "linux"))'.dependencies]
-# https://github.com/rustdesk/rustdesk/discussions/10197, not use cpal on linux
 cpal = { git = "https://github.com/rustdesk-org/cpal", branch = "osx-screencapturekit" }
 ringbuf = "0.3"
 
@@ -101,50 +92,15 @@ sys-locale = "0.3"
 enigo = { path = "libs/enigo", features = [ "with_serde" ] }
 clipboard = { path = "libs/clipboard" }
 ctrlc = "3.2"
-# arboard = { version = "3.4", features = ["wayland-data-control"] }
 arboard = { git = "https://github.com/rustdesk-org/arboard", features = ["wayland-data-control"] }
 clipboard-master = { git = "https://github.com/rustdesk-org/clipboard-master" }
 portable-pty = { git = "https://github.com/rustdesk-org/wezterm", branch = "rustdesk/pty_based_0.8.1", package = "portable-pty" }
-
 system_shutdown = "4.0"
 qrcode-generator = "4.1"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-winapi = { version = "0.3", features = [
-    "winuser",
-    "wincrypt",
-    "shellscalingapi",
-    "pdh",
-    "synchapi",
-    "memoryapi",
-    "shellapi",
-    "devguid",
-    "setupapi",
-    "cguid",
-    "cfgmgr32",
-    "ioapiset",
-    "winspool",
-] }
-windows = { version = "0.61", features = [
-    "Win32",
-    "Win32_Foundation",
-    "Win32_Security",
-    "Win32_Security_Authorization",
-    "Win32_Storage_FileSystem",
-    "Win32_System",
-    "Win32_System_Com",
-    "Win32_System_Diagnostics",
-    "Win32_System_Diagnostics_ToolHelp",
-    "Win32_System_Environment",
-    "Win32_System_IO",
-    "Win32_System_Memory",
-    "Win32_System_Pipes",
-    "Win32_System_Registry",
-    "Win32_System_SystemInformation",
-    "Win32_System_Threading",
-    "Win32_UI_Shell",
-    "Win32_UI_WindowsAndMessaging",
-] }
+winapi = { version = "0.3", features = ["winuser", "wincrypt", "shellscalingapi", "pdh", "synchapi", "memoryapi", "shellapi", "devguid", "setupapi", "cguid", "cfgmgr32", "ioapiset", "winspool"] }
+windows = { version = "0.61", features = ["Win32", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System", "Win32_System_Com", "Win32_System_Diagnostics", "Win32_System_Diagnostics_ToolHelp", "Win32_System_Environment", "Win32_System_IO", "Win32_System_Memory", "Win32_System_Pipes", "Win32_System_Registry", "Win32_System_SystemInformation", "Win32_System_Threading", "Win32_UI_Shell", "Win32_UI_WindowsAndMessaging"] }
 winreg = "0.11"
 windows-service = "0.6"
 virtual_display = { path = "libs/virtual_display" }
@@ -162,7 +118,6 @@ core-graphics = "0.22"
 include_dir = "0.7"
 fruitbasket = "0.10"
 objc_id = "0.1"
-# If we use piet "0.7" here, we must also update core-graphics to "0.24".
 piet = "0.6"
 piet-coregraphics = "0.6"
 foreign-types = "0.3"
@@ -214,32 +169,16 @@ android-wakelock = { git = "https://github.com/rustdesk-org/android-wakelock" }
 members = ["libs/scrap", "libs/hbb_common", "libs/base", "libs/enigo", "libs/clipboard", "libs/virtual_display", "libs/virtual_display/dylib", "libs/portable", "libs/remote_printer"]
 exclude = ["vdi/host"]
 
-# Patch libxdo-sys to use a stub implementation that doesn't require libxdo
-# This allows building and running on systems without libxdo installed (e.g., Wayland-only)
 [patch.crates-io]
 libxdo-sys = { path = "libs/libxdo-sys-stub" }
-# One branch off upstream v0.13.0, the tag whose crate versions match this stack.
-# webrtc-util: reads the Windows adapter list's IPv6 addresses as host-order u16 groups, so every
-# one comes out byte-swapped, fails to bind, and ICE gathers no IPv6 host candidate on Windows.
-# webrtc-sctp: RFC 4960's 1s RTO floor makes a single loss cost 1-3s on a link whose RTT is 24-64ms,
-# and fast retransmit cannot cover a request/response exchange; INITIAL_MTU 1228 also fragments on
-# IPv6; and its AIMD pins a lossy long-haul link to MSS/(RTT*sqrt(p)), so a switch sends without
-# a congestion window, as KCP does - on by default, `allow-webrtc-congestion-control` opts back in.
-# Sending that way, a reordering window keeps a chunk that is merely late from being resent on a
-# path that jitters, every DATA chunk asks for its SACK at once so a lost tail is back within an
-# RTT at KCP's RTO floors, and bundles of small chunks stay within the MTU. A T3-rtx resends
-# everything outstanding when it packs into four packets and otherwise probes with one and lets
-# the SACK settle the rest (F-RTO), timed from the latest send, so a stall no longer resends the
-# whole backlog behind itself while a short lost tail still comes back at once.
-# Pinned by rev, not branch: a fork branch can be rewritten out from under the lockfile.
 webrtc-util = { git = "https://github.com/rustdesk-org/webrtc", rev = "db3b07a9dd8f195916c89c2e62a8911402b11d27" }
 webrtc-sctp = { git = "https://github.com/rustdesk-org/webrtc", rev = "db3b07a9dd8f195916c89c2e62a8911402b11d27" }
 
 [package.metadata.winres]
-LegalCopyright = "Copyright © 2026 Purslane Tech Pte. Ltd. All rights reserved."
-ProductName = "RustDesk"
-FileDescription = "RustDesk Remote Desktop"
-OriginalFilename = "rustdesk.exe"
+LegalCopyright = "Copyright © 2026 BeeNet. All rights reserved."
+ProductName = "BeeNetDesk"
+FileDescription = "BeeNetDesk Remote Desktop"
+OriginalFilename = "beenetdesk.exe"
 
 [target.'cfg(target_os="windows")'.build-dependencies]
 winres = "0.1"
@@ -256,18 +195,16 @@ docopt = "1.1"
 tokio = { version = "1.44", features = ["test-util"] }
 
 [package.metadata.bundle]
-name = "RustDesk"
-identifier = "com.carriez.rustdesk"
+name = "BeeNetDesk"
+identifier = "com.beenet.beenetdesk"
 icon = ["res/32x32.png", "res/128x128.png", "res/128x128@2x.png"]
 osx_minimum_system_version = "10.14"
 
-#https://github.com/johnthagen/min-sized-rust
 [profile.release]
 lto = true
 codegen-units = 1
 panic = 'abort'
 strip = true
-#opt-level = 'z' # only have smaller size after strip
 rpath = true
 
 [profile.dev]
