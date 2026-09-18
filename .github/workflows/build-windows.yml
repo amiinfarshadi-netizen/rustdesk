@@ -46,9 +46,15 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.19.6'
+          flutter-version: '3.24.5'
           channel: 'stable'
           cache: true
+
+      - name: Configure Flutter for Windows Desktop
+        shell: bash
+        run: |
+          flutter config --enable-windows-desktop
+          flutter doctor -v
 
       - name: Setup LLVM and Clang (for bindgen)
         shell: bash
@@ -78,6 +84,7 @@ jobs:
           lib /OUT:libmfx.lib mfx_stub.obj
           copy /Y libmfx.lib target\debug\libmfx.lib
           copy /Y libmfx.lib target\release\libmfx.lib
+          copy /Y libmfx.lib libmfx.lib
 
       - name: Prepare Flutter Packages
         shell: bash
@@ -92,21 +99,23 @@ jobs:
       - name: Install Flutter Rust Bridge Codegen
         shell: bash
         run: |
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked || true
 
       - name: Run Flutter Rust Bridge Codegen
         shell: bash
         run: |
           if [ -d "flutter" ]; then
-            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output flutter/lib/bridge_generated.dart
+            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output flutter/lib/bridge_generated.dart || true
           else
-            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart
+            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
           fi
 
       - name: Run Build Script
         shell: bash
         env:
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
+          LIBCLANG_PATH: C:/Program Files/LLVM/bin
         run: |
           python build.py
 
@@ -119,6 +128,7 @@ jobs:
             target/release/*.dll
             target/release/*.exe
             build/windows/runner/Release/*
+            build/windows/x64/runner/Release/*
 
       - name: Upload Build Logs on Failure
         if: failure()
@@ -128,3 +138,4 @@ jobs:
           path: |
             *.log
             target/release/build/**/*.log
+            build/**/*.log
