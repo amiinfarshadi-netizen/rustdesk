@@ -109,20 +109,20 @@ jobs:
             flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
           fi
 
-      - name: Update Cargo Lock & Remove locked flag
+      - name: Remove locked flag & Fix Linker Conflict
         shell: bash
         run: |
-          # به‌روزرسانی Cargo.lock برای هماهنگی کامل با Cargo.toml
-          cargo generate-lockfile || true
-          # حذف فلگ --locked از build.py تا مانع بیلد نشود
+          # حذف فلگ بازدارنده --locked
           sed -i 's/--locked//g' build.py || true
+          # حذف link.exe مربوط به Git Bash برای جلوگیری از تداخل با MSVC Linker
+          rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
 
       - name: Run Build Script
-        shell: bash
+        shell: cmd
         env:
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
           VCPKG_ROOT: ${{ env.VCPKG_INSTALLATION_ROOT }}
-          LIBCLANG_PATH: C:/Program Files/LLVM/bin
+          LIBCLANG_PATH: C:\Program Files\LLVM\bin
         run: |
           python build.py
 
