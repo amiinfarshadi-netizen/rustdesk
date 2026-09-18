@@ -61,7 +61,12 @@ jobs:
         shell: bash
         run: |
           vcpkg integrate install
-          vcpkg install libvpx:x64-windows libyuv:x64-windows opus:x64-windows
+          # اگر مانیفست وجود دارد، وابستگی‌های آن نصب می‌شود و پکیج‌های عمومی به شکل کلاسیک نصب می‌شوند
+          if [ -f "vcpkg.json" ]; then
+            vcpkg install --triplet x64-windows
+          fi
+          # نصب مستقیم در حالت classic خارج از دایرکتوری دارای vcpkg.json
+          (cd "$VCPKG_INSTALLATION_ROOT" && ./vcpkg.exe install libvpx:x64-windows libyuv:x64-windows opus:x64-windows)
           echo "VCPKG_ROOT=$VCPKG_INSTALLATION_ROOT" >> $GITHUB_ENV
 
       - name: Provide libmfx Stub for hwcodec
