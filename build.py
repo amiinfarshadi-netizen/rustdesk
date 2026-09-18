@@ -975,10 +975,10 @@ def main():
         print(feats)
         return
 
-    if args.version:
+    if getattr(args, 'version', False):
         print(version)
         return
-
+        
     if args.skip_cargo:
         skip_cargo = True
 
