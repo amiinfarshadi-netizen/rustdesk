@@ -918,15 +918,20 @@ def build_flutter_dmg(version, features):
 def build_flutter_arch_manjaro(version, features):
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
-    ffi_bindgen_function_refactor()
+        if not os.path.exists("target/release/librustdesk.so"):
+            print("cargo build failed, please check rust source code.")
+            exit(-1)
+    # flutter build
     os.chdir('flutter')
-    system2('flutter build linux --release')
-    system2(f'strip {flutter_build_dir}/lib/librustdesk.so')
-    os.chdir('../res')
-    system2('HBB=`pwd`/.. FLUTTER=1 makepkg -f')
+    system2(f'flutter build linux --release')
+    os.chdir('..')
+    shutil.copy2('target/release/librustdesk.so', flutter_build_dir)
+    package(res_dir)
 
 
 def build_flutter_windows(version, features, skip_portable_pack):
+    flutter_build_dir = 'flutter/build/windows/runner/Release'
+    flutter_build_dir_2 = 'flutter/build/windows/x64/runner/Release'
     if not skip_cargo:
         system2(f'cargo build --locked --features {features} --lib --release')
         if not os.path.exists("target/release/librustdesk.dll"):
@@ -935,26 +940,25 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('flutter')
     system2('flutter build windows --release')
     os.chdir('..')
-    shutil.copy2('target/release/deps/dylib_virtual_display.dll',
-                 flutter_build_dir_2)
+    if os.path.exists(flutter_build_dir_2):
+        shutil.copy2('target/release/deps/dylib_virtual_display.dll', flutter_build_dir_2)
+    elif os.path.exists(flutter_build_dir):
+        shutil.copy2('target/release/deps/dylib_virtual_display.dll', flutter_build_dir)
+
     if skip_portable_pack:
         return
+
     os.chdir('libs/portable')
     system2('pip3 install -r requirements.txt')
-    system2(
-         f'python3 ./generate.py -f ../../{flutter_build_dir_2} -o . -e ../../{flutter_build_dir_2}/beenetdesk.exe')
+
+    if os.path.exists('./beenetdesk_portable.exe'):
+        os.replace('./target/release/rustdesk-portable-packer.exe', './beenetdesk_portable.exe')
+    else:
+        os.rename('./target/release/rustdesk-portable-packer.exe', './beenetdesk_portable.exe')
+
+    print(f'output location: {os.path.abspath(os.curdir)}/beenetdesk_portable.exe')
+    os.rename('./beenetdesk_portable.exe', f'./beenetdesk-{version}-install.exe')
     os.chdir('../..')
-      if os.path.exists('./beenetdesk_portable.exe'):
-      os.replace('./target/release/rustdesk-portable-packer.exe',
-                 './beenetdesk_portable.exe')
-  else:
-      os.rename('./target/release/rustdesk-portable-packer.exe',
-                './beenetdesk_portable.exe')
-  print(
-      f'output location: {os.path.abspath(os.curdir)}/beenetdesk_portable.exe')
-    os.rename('./rustdesk_portable.exe', f'./rustdesk-{version}-install.exe')
-    print(
-        f'output location: {os.path.abspath(os.curdir)}/rustdesk-{version}-install.exe')
 
 
 def main():
@@ -962,72 +966,30 @@ def main():
     parser = make_parser()
     args = parser.parse_args()
 
-    # Before anything with a side effect: this is a query, and a caller uses it to build the very
-    # binary it will then package. `get_features` stays the single definition of what a flag
-    # combination means; a caller that hardcodes the list instead is one edit away from compiling
-    # something other than what it ships.
+    version = get_version()
+    flutter = args.flutter
+
     if args.print_features:
-        # stdout carries the list and nothing else, so a caller can use it directly in a command
-        # substitution. `get_features` prints a human-readable line of its own; send that to stderr
-        # for this call rather than silencing it, which would change what every other path prints.
         with contextlib.redirect_stdout(sys.stderr):
             feats = ','.join(get_features(args))
         print(feats)
         return
 
-    if os.path.exists(exe_path):
-        os.unlink(exe_path)
-    if os.path.isfile('/usr/bin/pacman'):
-        system2('git checkout src/ui/common.tis')
-    version = get_version()
-    features = ','.join(get_features(args))
-    flutter = args.flutter
-    if not flutter:
-        system2('python3 res/inline-sciter.py')
-    print(args.skip_cargo)
+    if args.version:
+        print(version)
+        return
+
     if args.skip_cargo:
         skip_cargo = True
-    portable = args.portable
-    package = args.package
-    if package:
-        build_deb_from_folder(version, package, args.drm)
-        return
-    res_dir = 'resources'
-    external_resources(flutter, args, res_dir)
-    if windows:
-        # build virtual display dynamic library
-        os.chdir('libs/virtual_display/dylib')
-        system2('cargo build --locked --release')
-        os.chdir('../../..')
 
+    features = ','.join(get_features(args))
+    res_dir = f'beenetdesk-{version}'
+
+    if windows:
         if flutter:
-            build_flutter_windows(version, features, args.skip_portable_pack)
+            skip_portable = getattr(args, 'skip_portable_pack', False)
+            build_flutter_windows(version, features, skip_portable)
             return
-        system2('cargo build --locked --release --features ' + features)
-        # system2('upx.exe target/release/rustdesk.exe')
-          system2('mv target/release/beenetdesk.exe target/release/BeeNetDesk.exe')
-        pa = os.environ.get('P')
-        if pa:
-            # https://certera.com/kb/tutorial-guide-for-safenet-authentication-client-for-code-signing/
-            system2(
-                f'signtool sign /a /v /p {pa} /debug /f .\\cert.pfx /t http://timestamp.digicert.com  '
-                'target\\release\\BeeNetDesk.exe')
-        else:
-            print('Not signed')
-        os.makedirs(res_dir, exist_ok=True)
-        system2(
-              f'cp -rf target/release/BeeNetDesk.exe {res_dir}')
-        os.chdir('libs/portable')
-        system2('pip3 install -r requirements.txt')
-        system2(
-           f'python3 ./generate.py -f ../../{res_dir} -o . -e ../../{res_dir}/beenetdesk-{version}-win7-install.exe')
-         system2(f'mv ../../{res_dir}/beenetdesk-{version}-win7-install.exe ../..')
-    elif os.path.isfile('/usr/bin/pacman'):
-        # pacman -S -needed base-devel
-        system2("sed -i 's/pkgver=.*/pkgver=%s/g' res/PKGBUILD" % version)
-        if flutter:
-            build_flutter_arch_manjaro(version, features)
-        else:
             system2('cargo build --locked --release --features ' + features)
             system2('git checkout src/ui/common.tis')
             system2('strip target/release/rustdesk')
