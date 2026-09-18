@@ -82,8 +82,12 @@ jobs:
       - name: Prepare Flutter Packages
         shell: bash
         run: |
-          flutter doctor -v
-          flutter pub get
+          if [ -d "flutter" ]; then
+            cd flutter
+            flutter pub get
+          else
+            flutter pub get
+          fi
 
       - name: Install Flutter Rust Bridge Codegen
         shell: bash
@@ -93,7 +97,11 @@ jobs:
       - name: Run Flutter Rust Bridge Codegen
         shell: bash
         run: |
-          flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart
+          if [ -d "flutter" ]; then
+            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output flutter/lib/bridge_generated.dart
+          else
+            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart
+          fi
 
       - name: Run Build Script
         shell: bash
