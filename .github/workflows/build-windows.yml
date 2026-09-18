@@ -122,12 +122,16 @@ jobs:
       - name: Run Build Script
         shell: cmd
         env:
+          RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          RUST_BACKTRACE: "full"
           VCPKG_ROOT: C:\vcpkg
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
           BINDGEN_EXTRA_CLANG_ARGS: -I C:/vcpkg/installed/x64-windows/include -I C:/vcpkg/installed/x64-windows-static/include
         run: |
-          python build.py
+          python -u build.py --flutter --hwcodec
+          echo EXITCODE=%ERRORLEVEL%
+          exit %ERRORLEVEL%
 
       - name: Upload Build Artifacts
         if: success()
@@ -139,9 +143,10 @@ jobs:
             target/release/*.exe
             build/windows/runner/Release/*
             build/windows/x64/runner/Release/*
+          if-no-files-found: warn
 
       - name: Upload Build Logs on Failure
-        if: failure()
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: build-failure-logs
@@ -149,3 +154,7 @@ jobs:
             *.log
             target/release/build/**/*.log
             build/**/*.log
+            build-full.log
+            build-stdout.log
+            build-stderr.log
+          if-no-files-found: ignore
