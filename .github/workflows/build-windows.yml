@@ -119,10 +119,9 @@ jobs:
 
       - name: Prepare Flutter Packages
         shell: bash
-        working-directory: ${{ github.workspace }}
         run: |
+          if [ -d "flutter" ]; then cd flutter; fi
           pwd
-          test -f pubspec.yaml
           flutter pub get
 
       - name: Install Flutter Rust Bridge Codegen
@@ -135,11 +134,11 @@ jobs:
 
       - name: Run Flutter Rust Bridge Codegen
         shell: bash
-        working-directory: ${{ github.workspace }}
         run: |
+          if [ -d "flutter" ]; then cd flutter; fi
           flutter_rust_bridge_codegen \
-            --rust-input rust/src/api.rs \
-            --dart-output lib/bridge_generated.dart || true
+            --rust-input ../rust/src/api.rs \
+            --dart-output lib/bridge_generated.dart || flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
 
       - name: Remove locked flag & Fix Linker Conflict
         shell: bash
