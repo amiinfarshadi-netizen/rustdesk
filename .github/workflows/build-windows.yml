@@ -96,8 +96,8 @@ jobs:
             aom:x64-windows-static
 
           ./vcpkg.exe install \
-            "ffmpeg[core,avcodec,swscale,swresample]:x64-windows" \
-            "ffmpeg[core,avcodec,swscale,swresample]:x64-windows-static"
+            "ffmpeg[core,avcodec,avformat,swscale,swresample]:x64-windows" \
+            "ffmpeg[core,avcodec,avformat,swscale,swresample]:x64-windows-static"
 
           echo "VCPKG_ROOT=$TARGET_VCPKG" >> "$GITHUB_ENV"
 
@@ -147,6 +147,36 @@ jobs:
           sed -i 's/--locked//g' build.py || true
           rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
 
+      - name: Pre-fetch and Patch hwcodec for FFmpeg
+        shell: bash
+        working-directory: ${{ github.workspace }}
+        run: |
+          cargo fetch || true
+          # اصلاح ماکروها و فیلدهای حذف شده FFmpeg در سورس دانلود شده hwcodec
+          python -c "
+          import os, glob
+
+          cargo_home = os.path.expanduser('~/.cargo/git/checkouts')
+          hwcodec_files = glob.glob(f'{cargo_home}/**/hwcodec*/**/cpp/**/*.cpp', recursive=True)
+          hwcodec_files += glob.glob(f'{cargo_home}/**/hwcodec*/**/cpp/**/*.h', recursive=True)
+
+          for f in hwcodec_files:
+              with open(f, 'r', encoding='utf-8', errors='ignore') as fp:
+                  content = fp.read()
+              new_content = content
+              # تعریف ثابت‌های FF_PROFILE در صورت غیبت
+              if 'FF_PROFILE_H264_HIGH' in new_content and '#define FF_PROFILE_H264_HIGH' not in new_content:
+                  new_content = '#ifndef FF_PROFILE_H264_HIGH\n#define FF_PROFILE_H264_HIGH 100\n#endif\n' + new_content
+              if 'FF_PROFILE_HEVC_MAIN' in new_content and '#define FF_PROFILE_HEVC_MAIN' not in new_content:
+                  new_content = '#ifndef FF_PROFILE_HEVC_MAIN\n#define FF_PROFILE_HEVC_MAIN 1\n#endif\n' + new_content
+              # جایگزینی key_frame منسوخ شده
+              new_content = new_content.replace('->key_frame', '->flags & AV_FRAME_FLAG_KEY')
+              if new_content != content:
+                  with open(f, 'w', encoding='utf-8') as fp:
+                      fp.write(new_content)
+                  print(f'Successfully patched: {f}')
+          " || true
+
       - name: Run Build Script
         shell: cmd
         working-directory: ${{ github.workspace }}
@@ -157,9 +187,8 @@ jobs:
           VCPKG_ROOT: C:\vcpkg
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          BINDGEN_EXTRA_CLANG_ARGS: >-
-            -I C:/vcpkg/installed/x64-windows/include
-            -I C:/vcpkg/installed/x64-windows-static/include
+          INCLUDE: C:\vcpkg\installed\x64-windows-static\include;C:\vcpkg\installed\x64-windows\include;%INCLUDE%
+          LIB: C:\vcpkg\installed\x64-windows-static\lib;C:\vcpkg\installed\x64-windows\lib;%LIB%
         run: |
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
