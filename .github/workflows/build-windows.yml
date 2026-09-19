@@ -152,7 +152,6 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: |
           cargo fetch || true
-          # اصلاح ماکروها و فیلدهای حذف شده FFmpeg در سورس دانلود شده hwcodec
           python -c "
           import os, glob
 
@@ -164,18 +163,30 @@ jobs:
               with open(f, 'r', encoding='utf-8', errors='ignore') as fp:
                   content = fp.read()
               new_content = content
-              # تعریف ثابت‌های FF_PROFILE در صورت غیبت
               if 'FF_PROFILE_H264_HIGH' in new_content and '#define FF_PROFILE_H264_HIGH' not in new_content:
                   new_content = '#ifndef FF_PROFILE_H264_HIGH\n#define FF_PROFILE_H264_HIGH 100\n#endif\n' + new_content
               if 'FF_PROFILE_HEVC_MAIN' in new_content and '#define FF_PROFILE_HEVC_MAIN' not in new_content:
                   new_content = '#ifndef FF_PROFILE_HEVC_MAIN\n#define FF_PROFILE_HEVC_MAIN 1\n#endif\n' + new_content
-              # جایگزینی key_frame منسوخ شده
               new_content = new_content.replace('->key_frame', '->flags & AV_FRAME_FLAG_KEY')
               if new_content != content:
                   with open(f, 'w', encoding='utf-8') as fp:
                       fp.write(new_content)
                   print(f'Successfully patched: {f}')
           " || true
+
+      - name: Verify MSVC Environment (kernel32.lib check)
+        shell: cmd
+        run: |
+          echo INCLUDE=%INCLUDE%
+          echo LIB=%LIB%
+          where cl
+          where link
+          if exist "%WindowsSdkDir%lib\%WindowsSDKVersion%\um\x64\kernel32.lib" (
+            echo [OK] kernel32.lib found in Windows SDK.
+          ) else (
+            echo [ERROR] kernel32.lib NOT found in Windows SDK path!
+            exit /B 1
+          )
 
       - name: Run Build Script
         shell: cmd
@@ -187,9 +198,14 @@ jobs:
           VCPKG_ROOT: C:\vcpkg
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          INCLUDE: C:\vcpkg\installed\x64-windows-static\include;C:\vcpkg\installed\x64-windows\include;%INCLUDE%
-          LIB: C:\vcpkg\installed\x64-windows-static\lib;C:\vcpkg\installed\x64-windows\lib;%LIB%
         run: |
+          rem افزودن مسیرهای vcpkg به مسیرهای موجود MSVC (append، نه overwrite)
+          set "INCLUDE=C:\vcpkg\installed\x64-windows-static\include;C:\vcpkg\installed\x64-windows\include;%INCLUDE%"
+          set "LIB=C:\vcpkg\installed\x64-windows-static\lib;C:\vcpkg\installed\x64-windows\lib;%LIB%"
+
+          echo INCLUDE=%INCLUDE%
+          echo LIB=%LIB%
+
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
           exit /B %ERRORLEVEL%
