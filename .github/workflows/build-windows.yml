@@ -66,6 +66,7 @@ jobs:
       - name: Setup vcpkg and Build Dependencies
         shell: bash
         run: |
+          set -euo pipefail
           TARGET_VCPKG="C:/vcpkg"
           if [ -d "$VCPKG_INSTALLATION_ROOT" ]; then
             TARGET_VCPKG="$VCPKG_INSTALLATION_ROOT"
@@ -73,6 +74,7 @@ jobs:
           cd "$TARGET_VCPKG"
           ./vcpkg.exe integrate install
           ./vcpkg.exe install libvpx:x64-windows libvpx:x64-windows-static libyuv:x64-windows libyuv:x64-windows-static opus:x64-windows opus:x64-windows-static aom:x64-windows aom:x64-windows-static
+          ./vcpkg.exe install ffmpeg[core,avcodec,avutil,swscale,swresample]:x64-windows ffmpeg[core,avcodec,avutil,swscale,swresample]:x64-windows-static
           echo "VCPKG_ROOT=$TARGET_VCPKG" >> $GITHUB_ENV
 
       - name: Provide libmfx Stub for hwcodec
@@ -90,12 +92,7 @@ jobs:
       - name: Prepare Flutter Packages
         shell: bash
         run: |
-          if [ -d "flutter" ]; then
-            cd flutter
-            flutter pub get
-          else
-            flutter pub get
-          fi
+          flutter pub get
 
       - name: Install Flutter Rust Bridge Codegen
         shell: bash
@@ -105,18 +102,12 @@ jobs:
       - name: Run Flutter Rust Bridge Codegen
         shell: bash
         run: |
-          if [ -d "flutter" ]; then
-            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output flutter/lib/bridge_generated.dart || true
-          else
-            flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
-          fi
+          flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
 
       - name: Remove locked flag & Fix Linker Conflict
         shell: bash
         run: |
-          # حذف فلگ بازدارنده --locked
           sed -i 's/--locked//g' build.py || true
-          # حذف link.exe مربوط به Git Bash برای جلوگیری از تداخل با MSVC Linker
           rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
 
       - name: Run Build Script
@@ -126,6 +117,7 @@ jobs:
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
           RUST_BACKTRACE: "full"
           VCPKG_ROOT: C:\vcpkg
+          VCPKG_DEFAULT_TRIPLET: x64-windows-static
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
           BINDGEN_EXTRA_CLANG_ARGS: -I C:/vcpkg/installed/x64-windows/include -I C:/vcpkg/installed/x64-windows-static/include
         run: |
