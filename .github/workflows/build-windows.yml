@@ -83,6 +83,14 @@ jobs:
 
           cd "$TARGET_VCPKG"
 
+          if [ ! -f "./vcpkg.exe" ]; then
+            echo "[ERROR] vcpkg.exe not found in $TARGET_VCPKG"
+            exit 1
+          fi
+
+          # Ensure vcpkg itself also uses the selected installation.
+          export VCPKG_ROOT="$TARGET_VCPKG"
+
           ./vcpkg.exe integrate install
 
           ./vcpkg.exe install \
@@ -101,6 +109,7 @@ jobs:
 
           echo "VCPKG_ROOT=$TARGET_VCPKG" >> "$GITHUB_ENV"
 
+      # Temporary diagnostic workaround, not a real Intel Media SDK library.
       - name: Provide libmfx Stub for hwcodec
         shell: cmd
         working-directory: ${{ github.workspace }}
@@ -112,10 +121,24 @@ jobs:
           echo void MFXClose() {} >> mfx_stub.c
 
           cl /c mfx_stub.c /Fo:mfx_stub.obj
+          if errorlevel 1 exit /B 1
+
           lib /OUT:libmfx.lib mfx_stub.obj
+          if errorlevel 1 exit /B 1
+
+          if not exist libmfx.lib (
+            echo [ERROR] libmfx.lib was not created.
+            exit /B 1
+          )
 
           copy /Y libmfx.lib target\debug\libmfx.lib
+          if errorlevel 1 exit /B 1
+
           copy /Y libmfx.lib target\release\libmfx.lib
+          if errorlevel 1 exit /B 1
+
+          echo [INFO] Temporary libmfx stub created.
+          dir libmfx.lib
 
       - name: Prepare Flutter Packages
         shell: bash
@@ -138,7 +161,11 @@ jobs:
           if [ -d "flutter" ]; then cd flutter; fi
           flutter_rust_bridge_codegen \
             --rust-input ../rust/src/api.rs \
-            --dart-output lib/bridge_generated.dart || flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
+            --dart-output lib/bridge_generated.dart \
+            || flutter_rust_bridge_codegen \
+              --rust-input rust/src/api.rs \
+              --dart-output lib/bridge_generated.dart \
+            || true
 
       - name: Remove locked flag & Fix Linker Conflict
         shell: bash
@@ -179,8 +206,13 @@ jobs:
         run: |
           echo INCLUDE=%INCLUDE%
           echo LIB=%LIB%
+
           where cl
+          if errorlevel 1 exit /B 1
+
           where link
+          if errorlevel 1 exit /B 1
+
           if exist "%WindowsSdkDir%lib\%WindowsSDKVersion%\um\x64\kernel32.lib" (
             echo [OK] kernel32.lib found in Windows SDK.
           ) else (
@@ -195,20 +227,45 @@ jobs:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
           RUST_BACKTRACE: "full"
-          VCPKG_ROOT: C:\vcpkg
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
         run: |
-          rem افزودن مسیرهای vcpkg به مسیرهای موجود MSVC (append، نه overwrite)
-          set "INCLUDE=C:\vcpkg\installed\x64-windows-static\include;C:\vcpkg\installed\x64-windows\include;%INCLUDE%"
-          set "LIB=C:\vcpkg\installed\x64-windows-static\lib;C:\vcpkg\installed\x64-windows\lib;%LIB%"
+          rem Use VCPKG_ROOT exported by the dependency installation step.
+          if not defined VCPKG_ROOT (
+            echo [ERROR] VCPKG_ROOT is not defined.
+            exit /B 1
+          )
 
+          if not exist "%VCPKG_ROOT%\installed\x64-windows-static\lib" (
+            echo [ERROR] Static vcpkg library directory does not exist.
+            echo VCPKG_ROOT=%VCPKG_ROOT%
+            exit /B 1
+          )
+
+          rem Preserve existing MSVC and Windows SDK paths.
+          set "INCLUDE=%VCPKG_ROOT%\installed\x64-windows-static\include;%VCPKG_ROOT%\installed\x64-windows\include;%INCLUDE%"
+          set "LIB=%GITHUB_WORKSPACE%;%VCPKG_ROOT%\installed\x64-windows-static\lib;%VCPKG_ROOT%\installed\x64-windows\lib;%LIB%"
+
+          rem Check the library produced by the existing stub step.
+          if not exist "%GITHUB_WORKSPACE%\libmfx.lib" (
+            echo [ERROR] libmfx.lib is missing from the workspace root.
+            exit /B 1
+          )
+
+          rem Explicitly expose the native library directory to rustc.
+          set RUSTFLAGS=%RUSTFLAGS% -L "native=%GITHUB_WORKSPACE%"
+
+          echo [INFO] VCPKG_ROOT=%VCPKG_ROOT%
+          echo [INFO] RUSTFLAGS=%RUSTFLAGS%
           echo INCLUDE=%INCLUDE%
           echo LIB=%LIB%
+          dir "%GITHUB_WORKSPACE%\libmfx.lib"
 
           python -u build.py --flutter --hwcodec
-          echo EXITCODE=%ERRORLEVEL%
-          exit /B %ERRORLEVEL%
+          set "BUILD_EXIT_CODE=%ERRORLEVEL%"
+
+          echo EXITCODE=%BUILD_EXIT_CODE%
+          exit /B %BUILD_EXIT_CODE%
 
       - name: Upload Build Artifacts
         if: success()
@@ -220,6 +277,8 @@ jobs:
             target/release/*.exe
             build/windows/runner/Release/*
             build/windows/x64/runner/Release/*
+            flutter/build/windows/runner/Release/*
+            flutter/build/windows/x64/runner/Release/*
           if-no-files-found: warn
 
       - name: Upload Build Logs on Failure
@@ -231,7 +290,8 @@ jobs:
             *.log
             target/release/build/**/*.log
             build/**/*.log
+            flutter/build/**/*.log
             build-full.log
             build-stdout.log
             build-stderr.log
-          if-no-files-found: ignore
+          if-no-files-found: warn
