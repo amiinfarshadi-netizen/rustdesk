@@ -2,9 +2,13 @@ name: BeeNet Windows Build
 
 on:
   push:
-    branches: [ master, main ]
+    branches:
+      - master
+      - main
   pull_request:
-    branches: [ master, main ]
+    branches:
+      - master
+      - main
   workflow_dispatch:
 
 concurrency:
@@ -36,7 +40,7 @@ jobs:
       - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Setup Rust Toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -46,72 +50,107 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: '3.24.5'
-          channel: 'stable'
+          flutter-version: "3.24.5"
+          channel: stable
           cache: true
 
       - name: Configure Flutter for Windows Desktop
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
           flutter config --enable-windows-desktop
           flutter doctor -v
 
       - name: Setup LLVM and Clang (for bindgen)
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
-          echo "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> $GITHUB_ENV
-          echo "LLVM_HOME=C:/Program Files/LLVM" >> $GITHUB_ENV
-          echo "C:/Program Files/LLVM/bin" >> $GITHUB_PATH
+          echo "LIBCLANG_PATH=C:/Program Files/LLVM/bin" >> "$GITHUB_ENV"
+          echo "LLVM_HOME=C:/Program Files/LLVM" >> "$GITHUB_ENV"
+          echo "C:/Program Files/LLVM/bin" >> "$GITHUB_PATH"
 
       - name: Setup vcpkg and Build Dependencies
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
           set -euo pipefail
+
           TARGET_VCPKG="C:/vcpkg"
-          if [ -d "$VCPKG_INSTALLATION_ROOT" ]; then
+
+          if [ -n "${VCPKG_INSTALLATION_ROOT:-}" ] && [ -d "$VCPKG_INSTALLATION_ROOT" ]; then
             TARGET_VCPKG="$VCPKG_INSTALLATION_ROOT"
           fi
+
           cd "$TARGET_VCPKG"
+
           ./vcpkg.exe integrate install
-          ./vcpkg.exe install libvpx:x64-windows libvpx:x64-windows-static libyuv:x64-windows libyuv:x64-windows-static opus:x64-windows opus:x64-windows-static aom:x64-windows aom:x64-windows-static
-          ./vcpkg.exe install ffmpeg[core,avcodec,swscale,swresample]:x64-windows ffmpeg[core,avcodec,swscale,swresample]:x64-windows-static
-          echo "VCPKG_ROOT=$TARGET_VCPKG" >> $GITHUB_ENV
+
+          ./vcpkg.exe install \
+            libvpx:x64-windows \
+            libvpx:x64-windows-static \
+            libyuv:x64-windows \
+            libyuv:x64-windows-static \
+            opus:x64-windows \
+            opus:x64-windows-static \
+            aom:x64-windows \
+            aom:x64-windows-static
+
+          ./vcpkg.exe install \
+            "ffmpeg[core,avcodec,swscale,swresample]:x64-windows" \
+            "ffmpeg[core,avcodec,swscale,swresample]:x64-windows-static"
+
+          echo "VCPKG_ROOT=$TARGET_VCPKG" >> "$GITHUB_ENV"
 
       - name: Provide libmfx Stub for hwcodec
         shell: cmd
+        working-directory: ${{ github.workspace }}
         run: |
           if not exist target\debug mkdir target\debug
           if not exist target\release mkdir target\release
+
           echo void MFXInit() {} > mfx_stub.c
           echo void MFXClose() {} >> mfx_stub.c
+
           cl /c mfx_stub.c /Fo:mfx_stub.obj
           lib /OUT:libmfx.lib mfx_stub.obj
+
           copy /Y libmfx.lib target\debug\libmfx.lib
           copy /Y libmfx.lib target\release\libmfx.lib
 
       - name: Prepare Flutter Packages
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
+          pwd
+          test -f pubspec.yaml
           flutter pub get
 
       - name: Install Flutter Rust Bridge Codegen
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked || true
+          cargo install flutter_rust_bridge_codegen \
+            --version 1.80.1 \
+            --locked || true
 
       - name: Run Flutter Rust Bridge Codegen
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
-          flutter_rust_bridge_codegen --rust-input rust/src/api.rs --dart-output lib/bridge_generated.dart || true
+          flutter_rust_bridge_codegen \
+            --rust-input rust/src/api.rs \
+            --dart-output lib/bridge_generated.dart || true
 
       - name: Remove locked flag & Fix Linker Conflict
         shell: bash
+        working-directory: ${{ github.workspace }}
         run: |
           sed -i 's/--locked//g' build.py || true
           rm -f "/c/Program Files/Git/usr/bin/link.exe" || true
 
       - name: Run Build Script
         shell: cmd
+        working-directory: ${{ github.workspace }}
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
@@ -119,11 +158,13 @@ jobs:
           VCPKG_ROOT: C:\vcpkg
           VCPKG_DEFAULT_TRIPLET: x64-windows-static
           LIBCLANG_PATH: C:\Program Files\LLVM\bin
-          BINDGEN_EXTRA_CLANG_ARGS: -I C:/vcpkg/installed/x64-windows/include -I C:/vcpkg/installed/x64-windows-static/include
+          BINDGEN_EXTRA_CLANG_ARGS: >-
+            -I C:/vcpkg/installed/x64-windows/include
+            -I C:/vcpkg/installed/x64-windows-static/include
         run: |
           python -u build.py --flutter --hwcodec
           echo EXITCODE=%ERRORLEVEL%
-          exit %ERRORLEVEL%
+          exit /B %ERRORLEVEL%
 
       - name: Upload Build Artifacts
         if: success()
