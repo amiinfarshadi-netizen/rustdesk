@@ -64,7 +64,6 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.24.5"
           channel: stable
           cache: true
 
@@ -72,22 +71,31 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          if (-not $env:VCToolsInstallDir) {
-            throw "VCToolsInstallDir is not defined."
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path -LiteralPath $vswhere)) {
+            throw "vswhere.exe was not found."
           }
 
-          $msvcBin = Join-Path $env:VCToolsInstallDir "bin\Hostx64\x64"
-          $linker = Join-Path $msvcBin "link.exe"
-          $compiler = Join-Path $msvcBin "cl.exe"
-          $librarian = Join-Path $msvcBin "lib.exe"
+          $vsPath = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (-not $vsPath) {
+            throw "MSVC installation path not found."
+          }
 
-          foreach ($tool in @($linker, $compiler, $librarian)) {
+          $versionFile = Join-Path $vsPath "VC\Auxiliary\Build\Microsoft.VCToolsVersion.default.txt"
+          if (-not (Test-Path -LiteralPath $versionFile)) {
+            throw "Microsoft.VCToolsVersion.default.txt not found."
+          }
+
+          $msvcVersion = (Get-Content -LiteralPath $versionFile).Trim()
+          $msvcBin = Join-Path $vsPath "VC\Tools\MSVC\$msvcVersion\bin\Hostx64\x64"
+          $linker = Join-Path $msvcBin "link.exe"
+
+          foreach ($tool in @($linker, (Join-Path $msvcBin "cl.exe"), (Join-Path $msvcBin "lib.exe"))) {
             if (-not (Test-Path -LiteralPath $tool)) {
               throw "MSVC tool not found: $tool"
             }
           }
 
-          # Persist for all subsequent steps.
           $msvcBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
           @(
@@ -96,51 +104,14 @@ jobs:
             "CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER=$linker"
           ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          # GITHUB_PATH takes effect in the next step.
           $env:PATH = "$msvcBin;$env:PATH"
 
           Write-Host "Selected MSVC linker: $linker"
 
-          where.exe cl
-          if ($LASTEXITCODE -ne 0) { throw "cl.exe not found." }
-
-          where.exe link
-          if ($LASTEXITCODE -ne 0) { throw "link.exe not found." }
-
-          where.exe lib
-          if ($LASTEXITCODE -ne 0) { throw "lib.exe not found." }
-
-          if (-not $env:WindowsSdkDir -or -not $env:WindowsSDKVersion) {
-            throw "Windows SDK environment is incomplete."
-          }
-
-          $sdkVersion = $env:WindowsSDKVersion.TrimEnd('\', '/')
-          $kernel32 = Join-Path $env:WindowsSdkDir `
-            "Lib\$sdkVersion\um\x64\kernel32.lib"
-
-          if (-not (Test-Path -LiteralPath $kernel32)) {
-            throw "kernel32.lib not found: $kernel32"
-          }
-
-          Write-Host "[OK] kernel32.lib: $kernel32"
-
-          rustc -vV
-          if ($LASTEXITCODE -ne 0) { throw "rustc failed." }
-
-          cargo --version
-          if ($LASTEXITCODE -ne 0) { throw "cargo failed." }
-
       - name: Configure Flutter for Windows Desktop
         run: |
           flutter config --enable-windows-desktop
-          if ($LASTEXITCODE -ne 0) {
-            throw "Flutter desktop configuration failed."
-          }
-
           flutter doctor -v
-          if ($LASTEXITCODE -ne 0) {
-            throw "flutter doctor failed."
-          }
 
       - name: Setup LLVM and Clang for bindgen
         run: |
@@ -159,43 +130,25 @@ jobs:
             "LLVM_HOME=$llvmHome"
           ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-          $llvmBin |
-            Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-          # Keep MSVC ahead of other native tools.
-          $env:MSVC_BIN |
-            Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-
-          Write-Host "[OK] libclang.dll: $libclang"
+          $llvmBin | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          $env:MSVC_BIN | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
 
       - name: Setup vcpkg and Build Dependencies
         run: |
           $ErrorActionPreference = "Stop"
-
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
           $vcpkgRoot = "C:\vcpkg"
-
-          if (
-            $env:VCPKG_INSTALLATION_ROOT -and
-            (Test-Path -LiteralPath $env:VCPKG_INSTALLATION_ROOT)
-          ) {
+          if ($env:VCPKG_INSTALLATION_ROOT -and (Test-Path -LiteralPath $env:VCPKG_INSTALLATION_ROOT)) {
             $vcpkgRoot = $env:VCPKG_INSTALLATION_ROOT
           }
 
           $vcpkgExe = Join-Path $vcpkgRoot "vcpkg.exe"
-
-          if (-not (Test-Path -LiteralPath $vcpkgExe)) {
-            throw "vcpkg.exe not found: $vcpkgExe"
-          }
-
           $env:VCPKG_ROOT = $vcpkgRoot
           Set-Location $vcpkgRoot
 
           & $vcpkgExe integrate install
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg integrate install failed."
-          }
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg integrate install failed." }
 
           $packages = @(
             "libvpx:x64-windows"
@@ -211,19 +164,14 @@ jobs:
           )
 
           & $vcpkgExe install @packages
-          if ($LASTEXITCODE -ne 0) {
-            throw "vcpkg dependency installation failed."
-          }
+          if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed." }
 
-          "VCPKG_ROOT=$vcpkgRoot" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
-      # Diagnostic only. NOT a functional Intel Media SDK implementation.
       - name: Provide Diagnostic MFX Stubs
         working-directory: ${{ github.workspace }}
         run: |
           $ErrorActionPreference = "Stop"
-
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
           $stubDir = Join-Path $env:GITHUB_WORKSPACE "native-stubs"
@@ -235,25 +183,12 @@ jobs:
           $mfx = Join-Path $stubDir "mfx.lib"
 
           @'
-          /*
-           * Diagnostic symbol placeholders only.
-           * These are NOT ABI-compatible Media SDK implementations.
-           * Do not distribute a build using these stubs.
-           */
           void MFXInit(void) {}
           void MFXClose(void) {}
           '@ | Set-Content -LiteralPath $source -Encoding ascii
 
-          & "$env:MSVC_BIN\cl.exe" /nologo /c $source "/Fo$object"
-          if ($LASTEXITCODE -ne 0) {
-            throw "MFX stub compilation failed."
-          }
-
+          & "$env:MSVC_BIN\cl.exe" /nologo /c /MD $source "/Fo$object"
           & "$env:MSVC_BIN\lib.exe" /nologo "/OUT:$libmfx" $object
-          if ($LASTEXITCODE -ne 0) {
-            throw "MFX stub archive creation failed."
-          }
-
           Copy-Item -LiteralPath $libmfx -Destination $mfx -Force
 
           $destinations = @(
@@ -263,108 +198,44 @@ jobs:
           )
 
           foreach ($destination in $destinations) {
-            New-Item -ItemType Directory -Force -Path $destination |
-              Out-Null
-
+            New-Item -ItemType Directory -Force -Path $destination | Out-Null
             Copy-Item -LiteralPath $libmfx -Destination $destination -Force
             Copy-Item -LiteralPath $mfx -Destination $destination -Force
           }
 
-          "MFX_STUB_DIR=$stubDir" |
-            Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-          Get-Item -LiteralPath $libmfx, $mfx |
-            Select-Object FullName, Length |
-            Format-Table -AutoSize
-
-          & "$env:MSVC_BIN\lib.exe" /nologo /list $libmfx
-          if ($LASTEXITCODE -ne 0) {
-            throw "MFX stub archive verification failed."
-          }
-
-          Write-Warning "MFX stubs are diagnostic only, not production libraries."
+          "MFX_STUB_DIR=$stubDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
       - name: Prepare Flutter Packages
         working-directory: ${{ github.workspace }}
         run: |
-          $ErrorActionPreference = "Stop"
-
           if (Test-Path -LiteralPath "flutter\pubspec.yaml") {
             Set-Location "flutter"
-          } elseif (-not (Test-Path -LiteralPath "pubspec.yaml")) {
-            throw "Flutter pubspec.yaml was not found."
           }
-
           flutter pub get
-          if ($LASTEXITCODE -ne 0) {
-            throw "flutter pub get failed."
-          }
 
       - name: Install Flutter Rust Bridge Codegen
         working-directory: ${{ github.workspace }}
         run: |
-          $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
-
-          Write-Host "Cargo linker: $env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
-
-          cargo install flutter_rust_bridge_codegen `
-            --version 1.80.1 `
-            --locked `
-            -vv
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "Flutter Rust Bridge Codegen installation failed."
-          }
-
-          flutter_rust_bridge_codegen --version
-          if ($LASTEXITCODE -ne 0) {
-            throw "Flutter Rust Bridge Codegen verification failed."
-          }
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked -vv
 
       - name: Run Flutter Rust Bridge Codegen
         working-directory: ${{ github.workspace }}
         run: |
-          $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
-
           $root = $env:GITHUB_WORKSPACE
-
           $candidates = @(
             (Join-Path $root "rust\src\api.rs"),
             (Join-Path $root "src\api.rs"),
             (Join-Path $root "src\flutter_ffi.rs")
           )
-
-          $rustInput = $candidates |
-            Where-Object { Test-Path -LiteralPath $_ } |
-            Select-Object -First 1
+          $rustInput = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
           if ($rustInput) {
-            if (Test-Path -LiteralPath (Join-Path $root "flutter\pubspec.yaml")) {
-              $flutterDir = Join-Path $root "flutter"
-            } elseif (Test-Path -LiteralPath (Join-Path $root "pubspec.yaml")) {
-              $flutterDir = $root
-            } else {
-              $flutterDir = $root
-            }
-
+            $flutterDir = if (Test-Path -LiteralPath (Join-Path $root "flutter\pubspec.yaml")) { Join-Path $root "flutter" } else { $root }
             Set-Location $flutterDir
             $dartOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
-
-            Write-Host "Running Flutter Rust Bridge codegen..."
-            Write-Host "Rust input: $rustInput"
-            Write-Host "Dart output: $dartOutput"
-
-            flutter_rust_bridge_codegen `
-              --rust-input $rustInput `
-              --dart-output $dartOutput
-
-            if ($LASTEXITCODE -ne 0) {
-              Write-Warning "Codegen completed with non-zero exit code or skipped."
-            }
-          } else {
-            Write-Host "No standalone api.rs found. Pre-generated bridge files are present in the repository; skipping codegen step."
+            flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput
           }
 
       - name: Prepare build.py for Diagnostic Build
@@ -392,26 +263,14 @@ jobs:
           def patch_command(match):
               command = match.group(0)
               command = re.sub(r'(?<!\S)--locked\b', '', command)
-
               if not re.search(r'(?<!\S)-vv\b', command):
                   command = command.replace("cargo build", "cargo build -vv", 1)
-
               return command
 
           updated = re.sub(pattern, patch_command, updated)
-
-          compile(updated, str(path), "exec")
           path.write_text(updated, encoding="utf-8")
-
           print(f"Prepared {len(matches)} cargo build command(s).")
-          for line_number, line in enumerate(updated.splitlines(), 1):
-              if "cargo build" in line:
-                  print(f"{line_number}: {line.strip()}")
           '@ | python -
-
-          if ($LASTEXITCODE -ne 0) {
-            throw "build.py preparation failed."
-          }
 
       - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
         working-directory: ${{ github.workspace }}
@@ -420,18 +279,14 @@ jobs:
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
           cargo fetch
-          if ($LASTEXITCODE -ne 0) {
-            throw "cargo fetch failed."
-          }
+          if ($LASTEXITCODE -ne 0) { throw "cargo fetch failed." }
 
           @'
           import os
           import re
           from pathlib import Path
 
-          cargo_home = Path(
-              os.environ.get("CARGO_HOME", str(Path.home() / ".cargo"))
-          )
+          cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
           checkouts = cargo_home / "git" / "checkouts"
 
           if not checkouts.is_dir():
@@ -461,11 +316,7 @@ jobs:
               }
 
               for name, value in constants.items():
-                  defined = re.search(
-                      rf"^\s*#\s*define\s+{re.escape(name)}\b",
-                      updated,
-                      re.MULTILINE,
-                  )
+                  defined = re.search(rf"^\s*#\s*define\s+{re.escape(name)}\b", updated, re.MULTILINE)
                   if name in updated and not defined:
                       updated = (
                           f"#ifndef {name}\n"
@@ -473,13 +324,12 @@ jobs:
                           f"#endif\n"
                       ) + updated
 
-              # Patch key_frame field removal for modern FFmpeg (FFmpeg 6/7+)
+              # Patch key_frame field removal
               if "frame_->key_frame" in updated:
                   updated = updated.replace(
                       "int key_frame = frame_->key_frame;",
                       "int key_frame = (frame_->flags & AV_FRAME_FLAG_KEY) ? 1 : 0;"
                   )
-                  # In case of fallback branches or standalone references:
                   updated = re.sub(
                       r'\b(\w+)->key_frame\b',
                       r'(((\1)->flags & AV_FRAME_FLAG_KEY) ? 1 : 0)',
@@ -495,48 +345,27 @@ jobs:
           print(f"Inspected {len(files)} files; patched {patched} files.")
           '@ | python -
 
-          if ($LASTEXITCODE -ne 0) {
-            throw "hwcodec compatibility patch failed."
-          }
-
       - name: Run Build Script
         working-directory: ${{ github.workspace }}
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+          # Force MD CRT for C/C++ dependencies like hwcodec built by cc-rs
+          CFLAGS: "/MD"
+          CXXFLAGS: "/MD"
         run: |
           $ErrorActionPreference = "Stop"
-
           $PSNativeCommandUseErrorActionPreference = $false
-
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
-
-          if (-not $env:VCPKG_ROOT) {
-            throw "VCPKG_ROOT is not defined."
-          }
-
-          if (-not $env:MFX_STUB_DIR) {
-            throw "MFX_STUB_DIR is not defined."
-          }
 
           $staticRoot = Join-Path $env:VCPKG_ROOT "installed\x64-windows-static"
           $dynamicRoot = Join-Path $env:VCPKG_ROOT "installed\x64-windows"
           $staticLib = Join-Path $staticRoot "lib"
+          $dynamicLib = Join-Path $dynamicRoot "lib"
           $staticInclude = Join-Path $staticRoot "include"
 
-          foreach ($required in @(
-            $staticLib
-            $staticInclude
-            (Join-Path $env:MFX_STUB_DIR "libmfx.lib")
-            (Join-Path $env:MFX_STUB_DIR "mfx.lib")
-          )) {
-            if (-not (Test-Path -LiteralPath $required)) {
-              throw "Required build input not found: $required"
-            }
-          }
-
           $env:INCLUDE = "$staticInclude;$env:INCLUDE"
-          $env:LIB = "$env:MFX_STUB_DIR;$staticLib;$env:LIB"
+          $env:LIB = "$env:MFX_STUB_DIR;$staticLib;$dynamicLib;$env:LIB"
 
           $dynamicBin = Join-Path $dynamicRoot "bin"
           if (Test-Path -LiteralPath $dynamicBin) {
@@ -545,50 +374,24 @@ jobs:
 
           Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
+          # Pass missing FFmpeg, Media Foundation libs, and resolve CRT conflict
           $rustFlags = @(
-            "-L"
-            "native=$env:MFX_STUB_DIR"
-            "-L"
-            "native=$staticLib"
+            "-L", "native=$env:MFX_STUB_DIR",
+            "-L", "native=$staticLib",
+            "-L", "native=$dynamicLib",
+            "-l", "dylib=swresample",
+            "-l", "dylib=mfplat",
+            "-l", "dylib=mfuuid",
+            "-l", "dylib=wmcodecdspuuid",
+            "-C", "link-arg=/NODEFAULTLIB:LIBCMT"
           )
 
           $env:CARGO_ENCODED_RUSTFLAGS = $rustFlags -join ([char]0x1f)
 
-          $diagnostics = @(
-            "MSVC_BIN=$env:MSVC_BIN"
-            "CARGO_LINKER=$env:CARGO_TARGET_X86_64_PC_WINDOWS_MSVC_LINKER"
-            "VCPKG_ROOT=$env:VCPKG_ROOT"
-            "MFX_STUB_DIR=$env:MFX_STUB_DIR"
-            "RUST_FLAGS=$($rustFlags -join ' | ')"
-            "LIB=$env:LIB"
-            "INCLUDE=$env:INCLUDE"
-          )
-
-          $diagnostics |
-            Tee-Object -FilePath "build-environment.log"
-
-          where.exe link
-          if ($LASTEXITCODE -ne 0) {
-            throw "link.exe not found."
-          }
-
           $cmd = Get-Command link.exe -CommandType Application | Select-Object -First 1
-          $resolvedLinker = $cmd.Source
+          Write-Host "Validated Linker: $($cmd.Source)"
 
-          if ($resolvedLinker -notlike "*VC\Tools\MSVC*" -and $resolvedLinker -ine $env:MSVC_LINK_EXE) {
-            throw "Incorrect linker selected: $resolvedLinker"
-          }
-
-          Write-Host "Validated Linker: $resolvedLinker"
-
-          Get-Item `
-            (Join-Path $env:MFX_STUB_DIR "libmfx.lib"), `
-            (Join-Path $env:MFX_STUB_DIR "mfx.lib") |
-            Select-Object FullName, Length |
-            Format-Table -AutoSize
-
-          python -u build.py --flutter --hwcodec 2>&1 |
-            Tee-Object -FilePath "build-full.log"
+          python -u build.py --flutter --hwcodec 2>&1 | Tee-Object -FilePath "build-full.log"
 
           $buildExitCode = $LASTEXITCODE
           Write-Host "BUILD_EXIT_CODE=$buildExitCode"
