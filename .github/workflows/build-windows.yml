@@ -105,7 +105,6 @@ jobs:
           ) | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
 
           $env:PATH = "$msvcBin;$env:PATH"
-
           Write-Host "Selected MSVC linker: $linker"
 
       - name: Configure Flutter for Windows Desktop
@@ -151,19 +150,19 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "vcpkg integrate install failed." }
 
           $packages = @(
-            "libvpx:x64-windows"
-            "libvpx:x64-windows-static"
-            "libyuv:x64-windows"
-            "libyuv:x64-windows-static"
-            "opus:x64-windows"
-            "opus:x64-windows-static"
-            "aom:x64-windows"
-            "aom:x64-windows-static"
-            "ffmpeg[core,avcodec,avformat,swscale,swresample]:x64-windows"
+            "libvpx:x64-windows",
+            "libvpx:x64-windows-static",
+            "libyuv:x64-windows",
+            "libyuv:x64-windows-static",
+            "opus:x64-windows",
+            "opus:x64-windows-static",
+            "aom:x64-windows",
+            "aom:x64-windows-static",
+            "ffmpeg[core,avcodec,avformat,swscale,swresample]:x64-windows",
             "ffmpeg[core,avcodec,avformat,swscale,swresample]:x64-windows-static"
           )
 
-          & $vcpkgExe install @packages
+          & $vcpkgExe install @packages --recurse
           if ($LASTEXITCODE -ne 0) { throw "vcpkg dependency installation failed." }
 
           "VCPKG_ROOT=$vcpkgRoot" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
@@ -192,8 +191,8 @@ jobs:
           Copy-Item -LiteralPath $libmfx -Destination $mfx -Force
 
           $destinations = @(
-            $env:GITHUB_WORKSPACE
-            (Join-Path $env:GITHUB_WORKSPACE "target\debug")
+            $env:GITHUB_WORKSPACE,
+            (Join-Path $env:GITHUB_WORKSPACE "target\debug"),
             (Join-Path $env:GITHUB_WORKSPACE "target\release")
           )
 
@@ -237,7 +236,7 @@ jobs:
             $dartOutput = Join-Path $flutterDir "lib\generated_bridge.dart"
             flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput
             
-            # Ensure both naming conventions exist for backward/forward compatibility
+            # ایجاد نسخه با هر دو نام جهت اطمینان از سازگاری کامل importها
             $altOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
             if (Test-Path -LiteralPath $dartOutput) {
               Copy-Item -LiteralPath $dartOutput -Destination $altOutput -Force
@@ -258,24 +257,22 @@ jobs:
               raise SystemExit("ERROR: build.py not found")
 
           original = path.read_text(encoding="utf-8")
-          updated = original
-
           pattern = r'\bcargo build\b[^\r\n\'"]*'
 
           matches = list(re.finditer(pattern, original))
           if not matches:
-              raise SystemExit("ERROR: No cargo build commands found in build.py")
+              print("No direct 'cargo build' matches to patch in build.py.")
+          else:
+              def patch_command(match):
+                  command = match.group(0)
+                  command = re.sub(r'(?<!\S)--locked\b', '', command)
+                  if not re.search(r'(?<!\S)-vv\b', command):
+                      command = command.replace("cargo build", "cargo build -vv", 1)
+                  return command
 
-          def patch_command(match):
-              command = match.group(0)
-              command = re.sub(r'(?<!\S)--locked\b', '', command)
-              if not re.search(r'(?<!\S)-vv\b', command):
-                  command = command.replace("cargo build", "cargo build -vv", 1)
-              return command
-
-          updated = re.sub(pattern, patch_command, updated)
-          path.write_text(updated, encoding="utf-8")
-          print(f"Prepared {len(matches)} cargo build command(s).")
+              updated = re.sub(pattern, patch_command, original)
+              path.write_text(updated, encoding="utf-8")
+              print(f"Prepared {len(matches)} cargo build command(s) in build.py.")
           '@ | python -
 
       - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
@@ -289,70 +286,41 @@ jobs:
 
           @'
           import os
-          import re
           from pathlib import Path
 
           cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
           checkouts = cargo_home / "git" / "checkouts"
 
           if not checkouts.is_dir():
-              raise SystemExit(f"ERROR: Cargo checkout directory not found: {checkouts}")
+              print(f"Cargo checkouts directory does not exist yet: {checkouts}")
+          else:
+              files = set()
+              for root in checkouts.glob("*hwcodec*"):
+                  for path in root.rglob("*"):
+                      if (
+                          path.is_file()
+                          and "cpp" in path.parts
+                          and path.suffix.lower() in {".cpp", ".h", ".hpp", ".cc"}
+                      ):
+                          files.add(path)
 
-          files = set()
-          for root in checkouts.glob("*hwcodec*"):
-               re.search(r'(?<!\S)-vv\b', command):
-                  command = command.replace("cargo build", "cargo build -vv", 1)
-              return command
-
-          updated = re.sub(pattern, patch_command, updated)
-          path.write_text(updated, encoding="utf-8")
-          print(f"Prepared {len(matches)} cargo build command(s).")
-          '@ | python -
-
-      - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
-        working-directory: ${{ github.workspace }}
-        run: |
-          $ErrorActionPreference = "Stop"
-          $env:PATH = "$env:MSVC_BIN;$env:PATH"
-
-          cargo fetch
-          if ($LASTEXITCODE -ne 0) { throw "cargo fetch failed." }
-
-          @'
-          import os
-          import re
-          from pathlib import Path
-
-          cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
-          checkouts = cargo_home / "git" / "checkouts"
-
-          if not checkouts.is_dir():
-              raise SystemExit(f"ERROR: Cargo checkout directory not found: {checkouts}")
-
-          files = set()
-          for root in checkouts.glob("*hwcodec*"):
-              for path in root.rglob("*"):
-                  if (
-                      path.is_file()
-                      and "cpp" in path.parts
-                      and path.suffix.lower() in {".cpp", ".h", ".hpp", ".cc"}
-                  ):
-                      files.add(path)
-
-          if not files:
-              raise SystemExit("ERROR: No hwcodec C/C++ source files found to inspect")
-
-          patched = 0
-          for path in sorted(files):
-              content = path.read_text(encoding="utf-8")
-              updated = content
-
+              patched = 0
               constants = {
                   "FF_PROFILE_H264_HIGH": "100",
                   "FF_PROFILE_HEVC_MAIN": "1",
               }
 
-              for {len(files)} files; patched {patched} files.")
+              for path in sorted(files):
+                  content = path.read_text(encoding="utf-8")
+                  updated = content
+                  for old_const, new_val in constants.items():
+                      if old_const in updated:
+                          updated = updated.replace(old_const, new_val)
+                  if updated != content:
+                      path.write_text(updated, encoding="utf-8")
+                      patched += 1
+
+              print(f"Inspected {len(files)} files; patched {patched} files for FFmpeg constants.")
           '@ | python -
 
       - name: Run Build Script
