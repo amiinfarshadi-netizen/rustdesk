@@ -350,7 +350,6 @@ jobs:
         env:
           RENDEZVOUS_SERVER: "5.202.90.37"
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
-          # Force MD CRT for C/C++ dependencies like hwcodec built by cc-rs
           CFLAGS: "/MD"
           CXXFLAGS: "/MD"
         run: |
@@ -374,7 +373,7 @@ jobs:
 
           Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
-          # Pass missing FFmpeg, Media Foundation libs, and resolve CRT conflict
+          # Explicitly link all necessary Media Foundation and FFmpeg libs
           $rustFlags = @(
             "-L", "native=$env:MFX_STUB_DIR",
             "-L", "native=$staticLib",
@@ -382,6 +381,7 @@ jobs:
             "-l", "dylib=swresample",
             "-l", "dylib=mfplat",
             "-l", "dylib=mfuuid",
+            "-l", "dylib=strmiids",
             "-l", "dylib=wmcodecdspuuid",
             "-C", "link-arg=/NODEFAULTLIB:LIBCMT"
           )
@@ -404,7 +404,7 @@ jobs:
         if: success()
         uses: actions/upload-artifact@v4
         with:
-          name: beenetdesk-windows-diagnostic-not-for-release
+          name: beenetdesk-windows-binaries
           path: |
             target/release/*.dll
             target/release/*.exe
