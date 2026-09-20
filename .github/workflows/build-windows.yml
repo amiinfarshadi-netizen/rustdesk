@@ -383,8 +383,6 @@ jobs:
           original = path.read_text(encoding="utf-8")
           updated = original
 
-          # Preserve the previous workflow's unlocked-build behavior,
-          # but modify cargo build commands only.
           pattern = r'\bcargo build\b[^\r\n\'"]*'
 
           matches = list(re.finditer(pattern, original))
@@ -402,7 +400,6 @@ jobs:
 
           updated = re.sub(pattern, patch_command, updated)
 
-          # Check Python syntax before replacing the script.
           compile(updated, str(path), "exec")
           path.write_text(updated, encoding="utf-8")
 
@@ -476,10 +473,19 @@ jobs:
                           f"#endif\n"
                       ) + updated
 
-              # Do not blindly replace ->key_frame.
-              # Reads, writes, and operator precedence require different fixes.
-              if "->key_frame" in updated:
-                  print(f"NOTICE: key_frame compatibility needs review: {path}")
+              # Patch key_frame field removal for modern FFmpeg (FFmpeg 6/7+)
+              if "frame_->key_frame" in updated:
+                  updated = updated.replace(
+                      "int key_frame = frame_->key_frame;",
+                      "int key_frame = (frame_->flags & AV_FRAME_FLAG_KEY) ? 1 : 0;"
+                  )
+                  # In case of fallback branches or standalone references:
+                  updated = re.sub(
+                      r'\b(\w+)->key_frame\b',
+                      r'(((\1)->flags & AV_FRAME_FLAG_KEY) ? 1 : 0)',
+                      updated
+                  )
+                  print(f"Patched key_frame compatibility in: {path}")
 
               if updated != content:
                   path.write_text(updated, encoding="utf-8")
@@ -501,7 +507,6 @@ jobs:
         run: |
           $ErrorActionPreference = "Stop"
 
-          # Native failures are handled explicitly after output is saved.
           $PSNativeCommandUseErrorActionPreference = $false
 
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
@@ -530,19 +535,14 @@ jobs:
             }
           }
 
-          # Prefer static dependencies. Do not mix dynamic import libraries
-          # into LIB as an implicit fallback.
           $env:INCLUDE = "$staticInclude;$env:INCLUDE"
           $env:LIB = "$env:MFX_STUB_DIR;$staticLib;$env:LIB"
 
-          # FFmpeg tools may need DLLs at runtime.
           $dynamicBin = Join-Path $dynamicRoot "bin"
           if (Test-Path -LiteralPath $dynamicBin) {
             $env:PATH = "$env:MSVC_BIN;$dynamicBin;$env:PATH"
           }
 
-          # Cargo splits ordinary RUSTFLAGS on whitespace.
-          # Encoded flags preserve each argument, even in paths with spaces.
           Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
           $rustFlags = @(
@@ -572,11 +572,9 @@ jobs:
             throw "link.exe not found."
           }
 
-          # Select only the top-priority link.exe in PATH
           $cmd = Get-Command link.exe -CommandType Application | Select-Object -First 1
           $resolvedLinker = $cmd.Source
 
-          # Verify that the primary linker is indeed the MSVC Linker
           if ($resolvedLinker -notlike "*VC\Tools\MSVC*" -and $resolvedLinker -ine $env:MSVC_LINK_EXE) {
             throw "Incorrect linker selected: $resolvedLinker"
           }
