@@ -64,7 +64,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          channel: stable
+          flutter-version: "3.19.6"
           cache: true
 
       - name: Pin and Verify MSVC Tools
@@ -234,8 +234,14 @@ jobs:
           if ($rustInput) {
             $flutterDir = if (Test-Path -LiteralPath (Join-Path $root "flutter\pubspec.yaml")) { Join-Path $root "flutter" } else { $root }
             Set-Location $flutterDir
-            $dartOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
+            $dartOutput = Join-Path $flutterDir "lib\generated_bridge.dart"
             flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput
+            
+            # Ensure both naming conventions exist for backward/forward compatibility
+            $altOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
+            if (Test-Path -LiteralPath $dartOutput) {
+              Copy-Item -LiteralPath $dartOutput -Destination $altOutput -Force
+            }
           }
 
       - name: Prepare build.py for Diagnostic Build
@@ -294,6 +300,37 @@ jobs:
 
           files = set()
           for root in checkouts.glob("*hwcodec*"):
+               re.search(r'(?<!\S)-vv\b', command):
+                  command = command.replace("cargo build", "cargo build -vv", 1)
+              return command
+
+          updated = re.sub(pattern, patch_command, updated)
+          path.write_text(updated, encoding="utf-8")
+          print(f"Prepared {len(matches)} cargo build command(s).")
+          '@ | python -
+
+      - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
+        working-directory: ${{ github.workspace }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $env:PATH = "$env:MSVC_BIN;$env:PATH"
+
+          cargo fetch
+          if ($LASTEXITCODE -ne 0) { throw "cargo fetch failed." }
+
+          @'
+          import os
+          import re
+          from pathlib import Path
+
+          cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+          checkouts = cargo_home / "git" / "checkouts"
+
+          if not checkouts.is_dir():
+              raise SystemExit(f"ERROR: Cargo checkout directory not found: {checkouts}")
+
+          files = set()
+          for root in checkouts.glob("*hwcodec*"):
               for path in root.rglob("*"):
                   if (
                       path.is_file()
@@ -315,34 +352,7 @@ jobs:
                   "FF_PROFILE_HEVC_MAIN": "1",
               }
 
-              for name, value in constants.items():
-                  defined = re.search(rf"^\s*#\s*define\s+{re.escape(name)}\b", updated, re.MULTILINE)
-                  if name in updated and not defined:
-                      updated = (
-                          f"#ifndef {name}\n"
-                          f"#define {name} {value}\n"
-                          f"#endif\n"
-                      ) + updated
-
-              # Patch key_frame field removal
-              if "frame_->key_frame" in updated:
-                  updated = updated.replace(
-                      "int key_frame = frame_->key_frame;",
-                      "int key_frame = (frame_->flags & AV_FRAME_FLAG_KEY) ? 1 : 0;"
-                  )
-                  updated = re.sub(
-                      r'\b(\w+)->key_frame\b',
-                      r'(((\1)->flags & AV_FRAME_FLAG_KEY) ? 1 : 0)',
-                      updated
-                  )
-                  print(f"Patched key_frame compatibility in: {path}")
-
-              if updated != content:
-                  path.write_text(updated, encoding="utf-8")
-                  patched += 1
-                  print(f"Patched: {path}")
-
-          print(f"Inspected {len(files)} files; patched {patched} files.")
+              for {len(files)} files; patched {patched} files.")
           '@ | python -
 
       - name: Run Build Script
