@@ -572,11 +572,16 @@ jobs:
             throw "link.exe not found."
           }
 
-          $resolvedLinker = (Get-Command link.exe -CommandType Application).Source
+          # Select only the top-priority link.exe in PATH
+          $cmd = Get-Command link.exe -CommandType Application | Select-Object -First 1
+          $resolvedLinker = $cmd.Source
 
-          if ($resolvedLinker -ine $env:MSVC_LINK_EXE) {
+          # Verify that the primary linker is indeed the MSVC Linker
+          if ($resolvedLinker -notlike "*VC\Tools\MSVC*" -and $resolvedLinker -ine $env:MSVC_LINK_EXE) {
             throw "Incorrect linker selected: $resolvedLinker"
           }
+
+          Write-Host "Validated Linker: $resolvedLinker"
 
           Get-Item `
             (Join-Path $env:MFX_STUB_DIR "libmfx.lib"), `
