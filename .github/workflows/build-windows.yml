@@ -280,30 +280,24 @@ jobs:
           $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
-          Write-Host "Fetching cargo dependencies..."
           cargo fetch
+          if ($LASTEXITCODE -ne 0) { throw "cargo fetch failed." }
 
-          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
-          $hwcodecDirs = Get-ChildItem -Path "$cargoHome\git\checkouts" -Directory -Recurse -Filter "*hwcodec*" -ErrorAction SilentlyContinue
+          @'
+          import os
+          import re
+          from pathlib import Path
 
-          foreach ($dir in $hwcodecDirs) {
-            # ۱. پچ حیاتی برای key_frame (رفع خطای C2039)
-            $decodeCpp = Get-ChildItem -Path $dir.FullName -Filter "ffmpeg_ram_decode.cpp" -Recurse -ErrorAction SilentlyContinue
-            foreach ($file in $decodeCpp) {
-              $content = Get-Content -Path $file.FullName -Raw
-              if ($content -match '\->key_frame') {
-                $patched = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
-                Set-Content -Path $file.FullName -Value $patched -NoNewline
-                Write-Host "Patched key_frame in: $($file.FullName)"
-              }
-            }
+          cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
+          checkouts = cargo_home / "git" / "checkouts"
 
-            # ۲. تزریق ثابت‌های FF_PROFILE به util.cpp
-            $utilCpp = Get-ChildItem -Path $dir.FullName -Filter "util.cpp" -Recurse -ErrorAction SilentlyContinue
-            foreach ($file in $utilCpp) {
-              $content = Get-Content -Path $file.FullName -Raw
-              if ($content -notmatch 'FF_PROFILE_H264_HIGH') {
-                $shim = @"
+          if not checkouts.is_dir():
+              print(f"Cargo checkouts directory not found: {checkouts}")
+          else:
+              patched_key_frame = 0
+              patched_shims = 0
+
+              shim_code = """
           #ifndef FF_PROFILE_H264_BASELINE
           #define FF_PROFILE_H264_BASELINE 66
           #endif
@@ -322,13 +316,34 @@ jobs:
           #ifndef FF_PROFILE_AAC_LOW
           #define FF_PROFILE_AAC_LOW 1
           #endif
-"@
-                $patched = $shim + "`n" + $content
-                Set-Content -Path $file.FullName -Value $patched -NoNewline
-                Write-Host "Injected FF_PROFILE shims into: $($file.FullName)"
-              }
-            }
-          }
+          """
+
+              for root in checkouts.glob("*hwcodec*"):
+                  for file in root.rglob("*.cpp"):
+                      content = file.read_text(encoding="utf-8", errors="ignore")
+                      modified = False
+
+                      # 1. Patch key_frame -> flags & AV_FRAME_FLAG_KEY
+                      if "key_frame" in content:
+                          new_content = re.sub(r'(\w+)->key_frame', r'(\1->flags & AV_FRAME_FLAG_KEY)', content)
+                          if new_content != content:
+                              content = new_content
+                              modified = True
+                              patched_key_frame += 1
+                              print(f"Patched key_frame in: {file}")
+
+                      # 2. Inject FF_PROFILE definitions
+                      if file.name == "util.cpp" and "FF_PROFILE_H264_HIGH" not in content:
+                          content = shim_code + "\n" + content
+                          modified = True
+                          patched_shims += 1
+                          print(f"Injected FF_PROFILE shims into: {file}")
+
+                      if modified:
+                          file.write_text(content, encoding="utf-8")
+
+              print(f"Summary: Patched {patched_key_frame} key_frame occurrences, {patched_shims} util files.")
+          '@ | python -
 
       - name: Run Build Script
         working-directory: ${{ github.workspace }}
