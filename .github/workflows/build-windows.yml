@@ -64,7 +64,7 @@ jobs:
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
-          flutter-version: "3.19.6"
+          channel: 'stable'
           cache: true
 
       - name: Pin and Verify MSVC Tools
@@ -236,7 +236,6 @@ jobs:
             $dartOutput = Join-Path $flutterDir "lib\generated_bridge.dart"
             flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput
             
-            # ایجاد نسخه با هر دو نام جهت اطمینان از سازگاری کامل importها
             $altOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
             if (Test-Path -LiteralPath $dartOutput) {
               Copy-Item -LiteralPath $dartOutput -Destination $altOutput -Force
@@ -351,7 +350,7 @@ jobs:
 
           Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
-          # Explicitly link all necessary Media Foundation and FFmpeg libs
+          # Explicitly link Media Foundation and system libs to resolve IID_ICodecAPI and CRT issues
           $rustFlags = @(
             "-L", "native=$env:MFX_STUB_DIR",
             "-L", "native=$staticLib",
@@ -359,9 +358,12 @@ jobs:
             "-l", "dylib=swresample",
             "-l", "dylib=mfplat",
             "-l", "dylib=mfuuid",
-            "-l", "dylib=strmiids",
             "-l", "dylib=wmcodecdspuuid",
-            "-C", "link-arg=/NODEFAULTLIB:LIBCMT"
+            "-l", "dylib=strmiids",
+            "-l", "dylib=ole32",
+            "-l", "dylib=oleaut32",
+            "-C", "link-arg=/NODEFAULTLIB:LIBCMT",
+            "-C", "link-arg=/NODEFAULTLIB:LIBCMTD"
           )
 
           $env:CARGO_ENCODED_RUSTFLAGS = $rustFlags -join ([char]0x1f)
