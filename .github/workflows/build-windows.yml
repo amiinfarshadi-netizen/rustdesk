@@ -221,39 +221,7 @@ jobs:
       - name: Run Flutter Rust Bridge Codegen
         working-directory: ${{ github.workspace }}
         run: |
-          $env:PATH = "$env:MSVC_BIN;$env:PATH"
-          $root = $env:GITHUB_WORKSPACE
-          $candidates = @(
-            (Join-Path $root "rust\src\api.rs"),
-            (Join-Path $root "src\api.rs"),
-            (Join-Path $root "src\flutter_ffi.rs")
-          )
-          $rustInput = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
-
-          if ($rustInput) {
-            $flutterDir = if (Test-Path -LiteralPath (LiteralPath $libmfx -Destination $destination -Force
-            Copy-Item -LiteralPath $mfx -Destination $destination -Force
-          }
-
-          "MFX_STUB_DIR=$stubDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: Prepare Flutter Packages
-        working-directory: ${{ github.workspace }}
-        run: |
-          if (Test-Path -LiteralPath "flutter\pubspec.yaml") {
-            Set-Location "flutter"
-          }
-          flutter pub get
-
-      - name: Install Flutter Rust Bridge Codegen
-        working-directory: ${{ github.workspace }}
-        run: |
-          $env:PATH = "$env:MSVC_BIN;$env:PATH"
-          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked -vv
-
-      - name: Run Flutter Rust Bridge Codegen
-        working-directory: ${{ github.workspace }}
-        run: |
+          $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
           $root = $env:GITHUB_WORKSPACE
           $candidates = @(
@@ -267,9 +235,22 @@ jobs:
             $flutterDir = if (Test-Path -LiteralPath (Join-Path $root "flutter\pubspec.yaml")) { Join-Path $root "flutter" } else { $root }
             Set-Location $flutterDir
             $dartOutput = Join-Path $flutterDir "lib\generated_bridge.dart"
+            $altOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
+
+            Write-Host "Executing codegen from $rustInput to $dartOutput with class RustdeskImpl..."
             flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput --class-name RustdeskImpl
             
-            $altOutput = Join-Path $flutterDir "lib\bridgerun: |
+            if (Test-Path -LiteralPath $dartOutput) {
+              Copy-Item -LiteralPath $dartOutput -Destination $altOutput -Force
+              Write-Host "Synced bridge file to $altOutput"
+            }
+          } else {
+            Write-Warning "No valid Rust input found for codegen."
+          }
+
+      - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
+        working-directory: ${{ github.workspace }}
+        run: |
           $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
