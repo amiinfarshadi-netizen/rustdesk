@@ -231,52 +231,45 @@ jobs:
           $rustInput = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
 
           if ($rustInput) {
+            $flutterDir = if (Test-Path -LiteralPath (LiteralPath $libmfx -Destination $destination -Force
+            Copy-Item -LiteralPath $mfx -Destination $destination -Force
+          }
+
+          "MFX_STUB_DIR=$stubDir" | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+
+      - name: Prepare Flutter Packages
+        working-directory: ${{ github.workspace }}
+        run: |
+          if (Test-Path -LiteralPath "flutter\pubspec.yaml") {
+            Set-Location "flutter"
+          }
+          flutter pub get
+
+      - name: Install Flutter Rust Bridge Codegen
+        working-directory: ${{ github.workspace }}
+        run: |
+          $env:PATH = "$env:MSVC_BIN;$env:PATH"
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --locked -vv
+
+      - name: Run Flutter Rust Bridge Codegen
+        working-directory: ${{ github.workspace }}
+        run: |
+          $env:PATH = "$env:MSVC_BIN;$env:PATH"
+          $root = $env:GITHUB_WORKSPACE
+          $candidates = @(
+            (Join-Path $root "rust\src\api.rs"),
+            (Join-Path $root "src\api.rs"),
+            (Join-Path $root "src\flutter_ffi.rs")
+          )
+          $rustInput = $candidates | Where-Object { Test-Path -LiteralPath $_ } | Select-Object -First 1
+
+          if ($rustInput) {
             $flutterDir = if (Test-Path -LiteralPath (Join-Path $root "flutter\pubspec.yaml")) { Join-Path $root "flutter" } else { $root }
             Set-Location $flutterDir
             $dartOutput = Join-Path $flutterDir "lib\generated_bridge.dart"
-            flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput
+            flutter_rust_bridge_codegen --rust-input $rustInput --dart-output $dartOutput --class-name RustdeskImpl
             
-            $altOutput = Join-Path $flutterDir "lib\bridge_generated.dart"
-            if (Test-Path -LiteralPath $dartOutput) {
-              Copy-Item -LiteralPath $dartOutput -Destination $altOutput -Force
-            }
-          }
-
-      - name: Prepare build.py for Diagnostic Build
-        working-directory: ${{ github.workspace }}
-        run: |
-          $ErrorActionPreference = "Stop"
-
-          @'
-          from pathlib import Path
-          import re
-
-          path = Path("build.py")
-          if not path.is_file():
-              raise SystemExit("ERROR: build.py not found")
-
-          original = path.read_text(encoding="utf-8")
-          pattern = r'\bcargo build\b[^\r\n\'"]*'
-
-          matches = list(re.finditer(pattern, original))
-          if not matches:
-              print("No direct 'cargo build' matches to patch in build.py.")
-          else:
-              def patch_command(match):
-                  command = match.group(0)
-                  command = re.sub(r'(?<!\S)--locked\b', '', command)
-                  if not re.search(r'(?<!\S)-vv\b', command):
-                      command = command.replace("cargo build", "cargo build -vv", 1)
-                  return command
-
-              updated = re.sub(pattern, patch_command, original)
-              path.write_text(updated, encoding="utf-8")
-              print(f"Prepared {len(matches)} cargo build command(s) in build.py.")
-          '@ | python -
-
-      - name: Pre-fetch Dependencies and Patch hwcodec for FFmpeg Compatibility
-        working-directory: ${{ github.workspace }}
-        run: |
+            $altOutput = Join-Path $flutterDir "lib\bridgerun: |
           $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
