@@ -332,8 +332,8 @@ jobs:
                               patched_key_frame += 1
                               print(f"Patched key_frame in: {file}")
 
-                      # 2. Inject FF_PROFILE definitions
-                      if file.name == "util.cpp" and "FF_PROFILE_H264_HIGH" not in content:
+                      # 2. Inject FF_PROFILE definitions into util.cpp or any relevant file
+                      if "util.cpp" in file.name.lower() and "#define FF_PROFILE_H264_HIGH" not in content:
                           content = shim_code + "\n" + content
                           modified = True
                           patched_shims += 1
@@ -373,7 +373,6 @@ jobs:
 
           Remove-Item Env:RUSTFLAGS -ErrorAction SilentlyContinue
 
-          # Explicitly link Media Foundation and system libs to resolve IID_ICodecAPI and CRT issues
           $rustFlags = @(
             "-L", "native=$env:MFX_STUB_DIR",
             "-L", "native=$staticLib",
