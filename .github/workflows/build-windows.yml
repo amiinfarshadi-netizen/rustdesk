@@ -274,53 +274,61 @@ jobs:
               print(f"Prepared {len(matches)} cargo build command(s) in build.py.")
           '@ | python -
 
-      - name: Pre-fetch Dependencies and Patch FFmpeg Profile Constants
+      - name: Pre-fetch Dependencies and Patch hwcodec for FFmpeg Compatibility
         working-directory: ${{ github.workspace }}
         run: |
           $ErrorActionPreference = "Stop"
           $env:PATH = "$env:MSVC_BIN;$env:PATH"
 
+          Write-Host "Fetching cargo dependencies..."
           cargo fetch
-          if ($LASTEXITCODE -ne 0) { throw "cargo fetch failed." }
 
-          @'
-          import os
-          from pathlib import Path
+          $cargoHome = if ($env:CARGO_HOME) { $env:CARGO_HOME } else { "$env:USERPROFILE\.cargo" }
+          $hwcodecDirs = Get-ChildItem -Path "$cargoHome\git\checkouts" -Directory -Recurse -Filter "*hwcodec*" -ErrorAction SilentlyContinue
 
-          cargo_home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
-          checkouts = cargo_home / "git" / "checkouts"
-
-          if not checkouts.is_dir():
-              print(f"Cargo checkouts directory does not exist yet: {checkouts}")
-          else:
-              files = set()
-              for root in checkouts.glob("*hwcodec*"):
-                  for path in root.rglob("*"):
-                      if (
-                          path.is_file()
-                          and "cpp" in path.parts
-                          and path.suffix.lower() in {".cpp", ".h", ".hpp", ".cc"}
-                      ):
-                          files.add(path)
-
-              patched = 0
-              constants = {
-                  "FF_PROFILE_H264_HIGH": "100",
-                  "FF_PROFILE_HEVC_MAIN": "1",
+          foreach ($dir in $hwcodecDirs) {
+            # ۱. پچ حیاتی برای key_frame (رفع خطای C2039)
+            $decodeCpp = Get-ChildItem -Path $dir.FullName -Filter "ffmpeg_ram_decode.cpp" -Recurse -ErrorAction SilentlyContinue
+            foreach ($file in $decodeCpp) {
+              $content = Get-Content -Path $file.FullName -Raw
+              if ($content -match '\->key_frame') {
+                $patched = $content -replace '(\w+)->key_frame', '($1->flags & AV_FRAME_FLAG_KEY)'
+                Set-Content -Path $file.FullName -Value $patched -NoNewline
+                Write-Host "Patched key_frame in: $($file.FullName)"
               }
+            }
 
-              for path in sorted(files):
-                  content = path.read_text(encoding="utf-8")
-                  updated = content
-                  for old_const, new_val in constants.items():
-                      if old_const in updated:
-                          updated = updated.replace(old_const, new_val)
-                  if updated != content:
-                      path.write_text(updated, encoding="utf-8")
-                      patched += 1
-
-              print(f"Inspected {len(files)} files; patched {patched} files for FFmpeg constants.")
-          '@ | python -
+            # ۲. تزریق ثابت‌های FF_PROFILE به util.cpp
+            $utilCpp = Get-ChildItem -Path $dir.FullName -Filter "util.cpp" -Recurse -ErrorAction SilentlyContinue
+            foreach ($file in $utilCpp) {
+              $content = Get-Content -Path $file.FullName -Raw
+              if ($content -notmatch 'FF_PROFILE_H264_HIGH') {
+                $shim = @"
+          #ifndef FF_PROFILE_H264_BASELINE
+          #define FF_PROFILE_H264_BASELINE 66
+          #endif
+          #ifndef FF_PROFILE_H264_MAIN
+          #define FF_PROFILE_H264_MAIN 77
+          #endif
+          #ifndef FF_PROFILE_H264_HIGH
+          #define FF_PROFILE_H264_HIGH 100
+          #endif
+          #ifndef FF_PROFILE_HEVC_MAIN
+          #define FF_PROFILE_HEVC_MAIN 1
+          #endif
+          #ifndef FF_PROFILE_HEVC_MAIN_10
+          #define FF_PROFILE_HEVC_MAIN_10 2
+          #endif
+          #ifndef FF_PROFILE_AAC_LOW
+          #define FF_PROFILE_AAC_LOW 1
+          #endif
+"@
+                $patched = $shim + "`n" + $content
+                Set-Content -Path $file.FullName -Value $patched -NoNewline
+                Write-Host "Injected FF_PROFILE shims into: $($file.FullName)"
+              }
+            }
+          }
 
       - name: Run Build Script
         working-directory: ${{ github.workspace }}
