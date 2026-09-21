@@ -156,7 +156,7 @@ class PlatformFFI {
       } catch (e) {
         debugPrint('Failed to get documents directory: $e');
       }
-     _ffiBind = RustdeskImplImpl(dylib);
+      _ffiBind = RustdeskImpl(dylib);
 
       if (isLinux) {
         if (isMain) {
