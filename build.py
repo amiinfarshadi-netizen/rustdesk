@@ -940,10 +940,22 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('flutter')
     system2('flutter build windows --release')
     os.chdir('..')
-    if os.path.exists(flutter_build_dir_2):
-        shutil.copy2('target/release/deps/dylib_virtual_display.dll', flutter_build_dir_2)
-    elif os.path.exists(flutter_build_dir):
-        shutil.copy2('target/release/deps/dylib_virtual_display.dll', flutter_build_dir)
+       target_dir = flutter_build_dir_2 if os.path.exists(flutter_build_dir_2) else (flutter_build_dir if os.path.exists(flutter_build_dir) else None)
+    if target_dir:
+        # بررسی هر دو مسیر احتمالی فایل مبدا
+        src_candidates = [
+            'target/release/dylib_virtual_display.dll',
+            'target/release/deps/dylib_virtual_display.dll',
+        ]
+        copied = False
+        for src in src_candidates:
+            if os.path.exists(src):
+                print(f"Copying {src} to {target_dir}")
+                shutil.copy2(src, target_dir)
+                copied = True
+                break
+        if not copied:
+            print("Warning: dylib_virtual_display.dll not found, skipping copy.")
 
     if skip_portable_pack:
         return
